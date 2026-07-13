@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import { resolveAuth } from "../src/auth/resolve.js";
 import { NetBirdOAuthProvider } from "../src/oauth/provider.js";
+import { DEFAULT_MAX_REQUESTS_PER_MINUTE, DEFAULT_REQUEST_TIMEOUT_MS } from "../src/config.js";
 import { AuthError } from "../src/auth/context.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
 
@@ -15,8 +16,8 @@ function newProvider(): NetBirdOAuthProvider {
   return new NetBirdOAuthProvider({
     logger: silentLogger,
     verifyPatOnLogin: false,
-    maxRequestsPerMinute: 110,
-    requestTimeoutMs: 30_000,
+    maxRequestsPerMinute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
+    requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
   });
 }
 

@@ -12,6 +12,9 @@ import { RateLimiter } from "./rateLimiter.js";
  * The token is never retained as a key — it's reduced to a truncated SHA-256
  * digest before it touches the map, so the raw secret never lives in the pool.
  */
+/** Hex digits of the SHA-256 digest kept as the map key — 64 bits, plenty to avoid collisions across tenants. */
+const KEY_HEX_CHARS = 16;
+
 export class LimiterPool {
   private readonly limiters = new Map<string, RateLimiter>();
 
@@ -19,7 +22,7 @@ export class LimiterPool {
 
   /** Returns the rate limiter for a tenant, creating it on first use. */
   get(token: string): RateLimiter {
-    const key = createHash("sha256").update(token).digest("hex").slice(0, 16);
+    const key = createHash("sha256").update(token).digest("hex").slice(0, KEY_HEX_CHARS);
     let limiter = this.limiters.get(key);
     if (!limiter) {
       limiter = new RateLimiter(this.maxRequestsPerMinute);

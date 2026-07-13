@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import { OAuthCore, type OAuthCoreOptions } from "../src/oauth/core.js";
+import { DEFAULT_MAX_REQUESTS_PER_MINUTE, DEFAULT_REQUEST_TIMEOUT_MS } from "../src/config.js";
 import { renderLoginPage, type LoginPageParams } from "../src/oauth/loginPage.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
 
@@ -10,8 +11,8 @@ function newCore(opts: Partial<OAuthCoreOptions> = {}): OAuthCore {
   return new OAuthCore({
     logger: silentLogger,
     verifyPatOnLogin: false,
-    maxRequestsPerMinute: 110,
-    requestTimeoutMs: 30_000,
+    maxRequestsPerMinute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
+    requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
     ...opts,
   });
 }
