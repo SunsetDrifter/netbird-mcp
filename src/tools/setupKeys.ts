@@ -41,7 +41,6 @@ export function registerSetupKeyTools(server: McpServer, deps: ToolDeps): void {
         .boolean()
         .optional()
         .describe("If true, peers are removed shortly after going offline."),
-      confirm: z.boolean().optional().describe("Set true to create the key."),
     },
     method: "POST",
     path: () => "/api/setup-keys",
@@ -70,7 +69,6 @@ export function registerSetupKeyTools(server: McpServer, deps: ToolDeps): void {
         .array(z.string())
         .optional()
         .describe("Replacement list of auto-assigned group IDs."),
-      confirm: z.boolean().optional().describe("Set true to apply the change."),
     },
     method: "PUT",
     path: ({ key_id }) => `/api/setup-keys/${encodeURIComponent(key_id)}`,

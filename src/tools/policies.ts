@@ -46,7 +46,6 @@ export function registerPolicyTools(server: McpServer, deps: ToolDeps): void {
       description: z.string().optional(),
       enabled: z.boolean().optional().default(true),
       rules: z.array(ruleSchema).min(1).describe("One or more access rules."),
-      confirm: z.boolean().optional().describe("Set true to create the policy."),
     },
     method: "POST",
     path: () => "/api/policies",
@@ -65,7 +64,6 @@ export function registerPolicyTools(server: McpServer, deps: ToolDeps): void {
       description: z.string().optional(),
       enabled: z.boolean().optional(),
       rules: z.array(ruleSchema).optional().describe("Full replacement rule set."),
-      confirm: z.boolean().optional().describe("Set true to apply the change."),
     },
     method: "PUT",
     path: ({ policy_id }) => `/api/policies/${encodeURIComponent(policy_id)}`,
@@ -81,7 +79,6 @@ export function registerPolicyTools(server: McpServer, deps: ToolDeps): void {
       "reach each other. Requires the exact policy_id and confirm=true.",
     inputSchema: {
       policy_id: z.string().describe("The exact policy ID to delete."),
-      confirm: z.boolean().describe("Must be true to delete."),
     },
     path: ({ policy_id }) => `/api/policies/${encodeURIComponent(policy_id)}`,
     label: "policy",
