@@ -36,6 +36,14 @@ export class NetBirdOAuthProvider implements OAuthServerProvider {
   private readonly core: OAuthCore;
   private readonly logger: Logger;
 
+  /**
+   * The core verifies PKCE itself inside exchangeAuthorizationCode. This flag
+   * tells the SDK's token handler to hand the code_verifier through instead of
+   * validating locally — without it the SDK passes `undefined` and every
+   * legitimate exchange would fail the core's mandatory PKCE check.
+   */
+  readonly skipLocalPkceValidation = true;
+
   constructor(opts: ProviderOptions) {
     this.logger = opts.logger;
     this.core = new OAuthCore(opts);
@@ -102,10 +110,15 @@ export class NetBirdOAuthProvider implements OAuthServerProvider {
   async exchangeAuthorizationCode(
     client: OAuthClientInformationFull,
     authorizationCode: string,
-    _codeVerifier?: string,
+    codeVerifier?: string,
     redirectUri?: string,
   ): Promise<OAuthTokens> {
-    return this.core.exchangeAuthorizationCode(client.client_id, authorizationCode, redirectUri);
+    return this.core.exchangeAuthorizationCode(
+      client.client_id,
+      authorizationCode,
+      codeVerifier,
+      redirectUri,
+    );
   }
 
   async exchangeRefreshToken(

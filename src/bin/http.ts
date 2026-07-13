@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -10,7 +9,7 @@ import { resolveAuth } from "../auth/resolve.js";
 import { AuthContext, AuthError } from "../auth/context.js";
 import { loadServerConfig } from "../config.js";
 import { createLogger } from "../logger.js";
-import { RateLimiter } from "../netbird/rateLimiter.js";
+import { LimiterPool } from "../netbird/limiterPool.js";
 import { buildServer } from "../server.js";
 import { NetBirdOAuthProvider } from "../oauth/provider.js";
 
@@ -29,20 +28,16 @@ const logger = createLogger(config.logLevel);
 const { port, tokenHeader, urlHeader, oauthEnabled, publicBaseUrl, verifyPatOnLogin } =
   config.http;
 
-const provider = new NetBirdOAuthProvider({ logger, verifyPatOnLogin });
+const provider = new NetBirdOAuthProvider({
+  logger,
+  verifyPatOnLogin,
+  maxRequestsPerMinute: config.maxRequestsPerMinute,
+  requestTimeoutMs: config.requestTimeoutMs,
+});
 
 // One rate limiter per tenant (keyed by a hash of the NetBird token, never the token
 // itself), so NetBird's per-account limit is respected without cross-tenant interference.
-const limiters = new Map<string, RateLimiter>();
-function limiterFor(token: string): RateLimiter {
-  const key = createHash("sha256").update(token).digest("hex").slice(0, 16);
-  let limiter = limiters.get(key);
-  if (!limiter) {
-    limiter = new RateLimiter(config.maxRequestsPerMinute);
-    limiters.set(key, limiter);
-  }
-  return limiter;
-}
+const limiters = new LimiterPool(config.maxRequestsPerMinute);
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -93,7 +88,7 @@ app.post("/mcp", async (req, res) => {
 
   // Stateless: fresh transport + server per request, disposed when the response closes.
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  const server = buildServer({ auth, config, logger, rateLimiter: limiterFor(auth.token) });
+  const server = buildServer({ auth, config, logger, rateLimiter: limiters.get(auth.token) });
 
   res.on("close", () => {
     transport.close();

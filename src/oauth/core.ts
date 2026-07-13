@@ -1,10 +1,8 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import {
-  normalizeBaseUrl,
-  DEFAULT_MAX_REQUESTS_PER_MINUTE,
-  DEFAULT_REQUEST_TIMEOUT_MS,
-} from "../config.js";
+import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { normalizeBaseUrl } from "../config.js";
 import type { Logger } from "../logger.js";
 import { AuthContext, AuthError } from "../auth/context.js";
 import { NetBirdClient, type TokenVerification } from "../netbird/client.js";
@@ -16,6 +14,18 @@ export interface OAuthCoreOptions {
   logger: Logger;
   /** Verify a NetBird PAT during login by making a cheap read call. */
   verifyPatOnLogin?: boolean;
+  /**
+   * Client-side per-minute cap for login-path PAT verification. Required — the
+   * operator's resolved config (NETBIRD_MAX_RPM) is threaded down here so the
+   * same limit governs login verification and tool calls; no default lives here.
+   */
+  maxRequestsPerMinute: number;
+  /**
+   * Per-request timeout (ms) for login-path PAT verification. Required — the
+   * operator's resolved config (NETBIRD_TIMEOUT_MS) is threaded down here; no
+   * default lives here.
+   */
+  requestTimeoutMs: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -68,15 +78,18 @@ export class OAuthCore {
   private readonly store = new OAuthStore();
   private readonly logger: Logger;
   private readonly verifyPat: boolean;
+  private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   // Shared across all logins so a burst of login attempts is throttled as one
   // stream, not one fresh (and therefore never-tripping) limiter per attempt.
-  private readonly verifyLimiter = new RateLimiter(DEFAULT_MAX_REQUESTS_PER_MINUTE);
+  private readonly verifyLimiter: RateLimiter;
 
   constructor(opts: OAuthCoreOptions) {
     this.logger = opts.logger;
     this.verifyPat = opts.verifyPatOnLogin ?? true;
+    this.timeoutMs = opts.requestTimeoutMs;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.verifyLimiter = new RateLimiter(opts.maxRequestsPerMinute);
   }
 
   // --- dynamic client registration (backs the adapter's clientsStore) ---
@@ -202,21 +215,29 @@ export class OAuthCore {
 
   challengeForCode(code: string): string {
     const challenge = this.store.challengeForCode(code);
-    if (!challenge) throw new Error("invalid_grant: unknown or expired authorization code");
+    if (!challenge) throw new InvalidGrantError("unknown or expired authorization code");
     return challenge;
   }
 
   exchangeAuthorizationCode(
     clientId: string,
     authorizationCode: string,
+    codeVerifier?: string,
     redirectUri?: string,
   ): OAuthTokens {
-    // PKCE was already verified by the SDK token handler via challengeForCode.
     const rec = this.store.takeCode(authorizationCode);
-    if (!rec) throw new Error("invalid_grant: unknown or expired authorization code");
-    if (rec.clientId !== clientId) throw new Error("invalid_grant: client mismatch");
+    if (!rec) throw new InvalidGrantError("unknown or expired authorization code");
+    if (rec.clientId !== clientId) throw new InvalidGrantError("client mismatch");
     if (redirectUri && redirectUri !== rec.redirectUri) {
-      throw new Error("invalid_grant: redirect_uri mismatch");
+      throw new InvalidGrantError("redirect_uri mismatch");
+    }
+    // Re-verify PKCE ourselves after consuming the code. The SDK's token handler
+    // already checked this via challengeForCode, but recomputing the S256
+    // challenge from the supplied verifier here — with no dependence on any prior
+    // lookup — means a future SDK reordering its internal calls can never let a
+    // code be exchanged without a matching verifier.
+    if (!pkceMatches(codeVerifier, rec.codeChallenge)) {
+      throw new InvalidGrantError("PKCE verification failed");
     }
 
     const { accessToken, refreshToken } = this.store.issueTokens(
@@ -230,7 +251,7 @@ export class OAuthCore {
   exchangeRefreshToken(clientId: string, refreshToken: string, scopes?: string[]): OAuthTokens {
     const rec = this.store.getRefresh(refreshToken);
     if (!rec || rec.clientId !== clientId) {
-      throw new Error("invalid_grant: unknown refresh token");
+      throw new InvalidGrantError("unknown refresh token");
     }
     const grantedScopes = scopes && scopes.length ? scopes : rec.scopes;
     const { accessToken, refreshToken: newRefresh } = this.store.issueTokens(
@@ -244,7 +265,7 @@ export class OAuthCore {
 
   verifyAccessToken(token: string): AuthInfo {
     const rec = this.store.getAccess(token);
-    if (!rec) throw new Error("invalid_token");
+    if (!rec) throw new InvalidTokenError("unknown or expired access token");
     return {
       token,
       clientId: rec.clientId,
@@ -298,11 +319,26 @@ export class OAuthCore {
       auth: { token: pat, baseUrl },
       logger: this.logger,
       rateLimiter: this.verifyLimiter,
-      timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      timeoutMs: this.timeoutMs,
       fetchImpl: this.fetchImpl,
     });
     return client.verifyToken();
   }
+}
+
+/**
+ * Recompute the S256 code challenge from the supplied verifier and compare it,
+ * in constant time, to the challenge bound to the authorization code. A missing
+ * verifier never matches. This is the module-internal PKCE re-check the exchange
+ * runs so PKCE cannot be silently skipped regardless of SDK call order.
+ */
+function pkceMatches(codeVerifier: string | undefined, storedChallenge: string): boolean {
+  if (!codeVerifier) return false;
+  const computed = createHash("sha256").update(codeVerifier).digest("base64url");
+  const a = Buffer.from(computed);
+  const b = Buffer.from(storedChallenge);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 /** The login form's API URL is untrusted input and becomes a fetch target — accept only http(s). */

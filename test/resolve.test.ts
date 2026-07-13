@@ -1,14 +1,28 @@
 import { describe, it, expect, vi } from "vitest";
 import { resolveAuth } from "../src/auth/resolve.js";
 import { NetBirdOAuthProvider } from "../src/oauth/provider.js";
+import { DEFAULT_MAX_REQUESTS_PER_MINUTE, DEFAULT_REQUEST_TIMEOUT_MS } from "../src/config.js";
 import { AuthError } from "../src/auth/context.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { silentLogger, pkcePair, HEADER_NAMES } from "./helpers.js";
 
-const silentLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+// A real PKCE pair: the code exchange re-verifies S256(verifier) === challenge.
+const { verifier: VERIFIER, challenge: CHALLENGE } = pkcePair(
+  "resolve-test-code-verifier-abcdefghijklmnopqrstuvwxyz0123456789",
+);
 
 function newProvider(): NetBirdOAuthProvider {
-  return new NetBirdOAuthProvider({ logger: silentLogger, verifyPatOnLogin: false });
+  return new NetBirdOAuthProvider({
+    logger: silentLogger,
+    verifyPatOnLogin: false,
+    maxRequestsPerMinute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
+    requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+  });
 }
+
+// Header names are required by authFromRequest now; the entrypoint threads the
+// config defaults through, so tests do the same.
+const headerNames = HEADER_NAMES;
 
 /**
  * Drive the provider's real public flow to mint a genuine access token. The
@@ -30,7 +44,7 @@ async function mintAccessToken(
     body: {
       client_id: client.client_id,
       redirect_uri: client.redirect_uris[0],
-      code_challenge: "challenge",
+      code_challenge: CHALLENGE,
       scope: "netbird",
       netbird_token: binding.netbirdToken,
       netbird_api_url: binding.baseUrl,
@@ -56,7 +70,7 @@ async function mintAccessToken(
   const tokens = await provider.exchangeAuthorizationCode(
     client,
     code,
-    "verifier",
+    VERIFIER,
     client.redirect_uris[0],
   );
   return tokens.access_token;
@@ -70,7 +84,10 @@ describe("resolveAuth", () => {
       baseUrl: "https://self.hosted",
     });
 
-    const auth = await resolveAuth({ authorization: `Bearer ${accessToken}` }, { provider });
+    const auth = await resolveAuth(
+      { authorization: `Bearer ${accessToken}` },
+      { provider, ...headerNames },
+    );
     expect(auth).toEqual({ token: "pat-abc", baseUrl: "https://self.hosted" });
   });
 
@@ -78,7 +95,7 @@ describe("resolveAuth", () => {
     const provider = newProvider();
 
     await expect(
-      resolveAuth({ authorization: "Bearer nope" }, { provider }),
+      resolveAuth({ authorization: "Bearer nope" }, { provider, ...headerNames }),
     ).rejects.toMatchObject({ code: "unknown_token" });
   });
 
@@ -86,25 +103,27 @@ describe("resolveAuth", () => {
     // Same seam whichever way you describe it: with no provider, a Bearer token
     // falls through to the direct-PAT header resolver, which doesn't recognise it.
     await expect(
-      resolveAuth({ authorization: "Bearer some-access-token" }),
+      resolveAuth({ authorization: "Bearer some-access-token" }, headerNames),
     ).rejects.toMatchObject({ code: "oauth_disabled" });
   });
 
   it("resolves a direct PAT via a custom header", async () => {
     const auth = await resolveAuth(
       { "x-custom-token": "pat" },
-      { tokenHeader: "x-custom-token" },
+      { tokenHeader: "x-custom-token", urlHeader: "x-netbird-api-url" },
     );
     expect(auth).toEqual({ token: "pat", baseUrl: "https://api.netbird.io" });
   });
 
   it("resolves a direct PAT via Authorization: Token", async () => {
-    const auth = await resolveAuth({ authorization: "Token pat" });
+    const auth = await resolveAuth({ authorization: "Token pat" }, headerNames);
     expect(auth).toEqual({ token: "pat", baseUrl: "https://api.netbird.io" });
   });
 
   it("rejects when no credentials are present", async () => {
-    await expect(resolveAuth({})).rejects.toMatchObject({ code: "missing_credentials" });
+    await expect(resolveAuth({}, headerNames)).rejects.toMatchObject({
+      code: "missing_credentials",
+    });
   });
 
   it("honors custom header names end to end", async () => {
@@ -128,7 +147,9 @@ describe("resolveAuth — scheme and expiry edges", () => {
   }
 
   it("tags an unrecognized Authorization scheme as wrong_scheme", async () => {
-    const code = await authErrorCode(resolveAuth({ authorization: "Basic dXNlcjpwdw==" }));
+    const code = await authErrorCode(
+      resolveAuth({ authorization: "Basic dXNlcjpwdw==" }, headerNames),
+    );
     expect(code).toBe("wrong_scheme");
   });
 
@@ -142,7 +163,7 @@ describe("resolveAuth — scheme and expiry edges", () => {
       });
       vi.advanceTimersByTime(61 * 60 * 1000); // past the 1h access-token TTL
       const code = await authErrorCode(
-        resolveAuth({ authorization: `Bearer ${token}` }, { provider }),
+        resolveAuth({ authorization: `Bearer ${token}` }, { provider, ...headerNames }),
       );
       expect(code).toBe("unknown_token");
     } finally {

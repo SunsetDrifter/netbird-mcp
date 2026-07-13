@@ -1,7 +1,16 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { buildServer } from "../src/server.js";
+import {
+  registerMutation,
+  registerDelete,
+  type ToolDeps,
+  type MutationManifest,
+  type DeleteManifest,
+} from "../src/tools/registry.js";
 import type { ServerConfig } from "../src/config.js";
 import type { Logger } from "../src/logger.js";
 
@@ -281,5 +290,123 @@ describe("per-manifest smoke coverage — remaining unique transforms", () => {
     expect(call.method).toBe("PUT");
     expect(new URL(call.url).pathname).toBe("/api/setup-keys/k%201");
     expect(call.body).toEqual({ revoked: true });
+  });
+});
+
+/**
+ * The registry injects a `confirm` field into every write tool's advertised
+ * schema; manifests declare only domain fields. These tests observe the listed
+ * schema through the MCP client's tools/list and assert optionality per kind.
+ */
+describe("registry-injected confirm field (via MCP client tools/list)", () => {
+  const recorder = makeRecordingFetch();
+
+  // The names of every write tool and whether confirm should be optional.
+  const mutationTools = [
+    "update_peer",
+    "create_group",
+    "update_group",
+    "create_policy",
+    "update_policy",
+    "create_setup_key",
+    "update_setup_key",
+  ];
+  const deleteTools = ["delete_peer", "delete_group", "delete_policy"];
+
+  interface ListedSchema {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  }
+
+  async function listedSchemas(): Promise<Map<string, ListedSchema>> {
+    // Destructive on so delete tools appear in the listing too.
+    const client = await connectClient(
+      { ...baseConfig, enableDestructive: true },
+      recorder.fetchImpl,
+    );
+    const { tools } = await client.listTools();
+    return new Map(tools.map((t) => [t.name, t.inputSchema as ListedSchema]));
+  }
+
+  it("advertises an optional confirm boolean on every mutation tool", async () => {
+    const schemas = await listedSchemas();
+    for (const name of mutationTools) {
+      const schema = schemas.get(name);
+      expect(schema, `${name} should be listed`).toBeDefined();
+      expect(schema?.properties, `${name} exposes confirm`).toHaveProperty("confirm");
+      expect(schema?.required ?? [], `${name} confirm is optional`).not.toContain("confirm");
+    }
+  });
+
+  it("advertises a required confirm boolean on every delete tool", async () => {
+    const schemas = await listedSchemas();
+    for (const name of deleteTools) {
+      const schema = schemas.get(name);
+      expect(schema, `${name} should be listed`).toBeDefined();
+      expect(schema?.properties, `${name} exposes confirm`).toHaveProperty("confirm");
+      expect(schema?.required ?? [], `${name} confirm is required`).toContain("confirm");
+    }
+  });
+});
+
+/**
+ * The confirm field is injected, never hand-declared. A manifest that declares
+ * its own `confirm` collides with the guardrail and must be rejected at
+ * registration time. This exercises the public registration functions directly
+ * because the collision can only arise from a (rejected) manifest — it can
+ * never reach the buildServer seam once the real manifests are correct.
+ */
+describe("confirm collision guard (registration-time throw)", () => {
+  const deps: ToolDeps = {
+    client: {} as never,
+    config: { ...baseConfig, enableDestructive: true },
+    logger: silentLogger,
+  };
+
+  it("rejects a mutation manifest that declares its own confirm field", () => {
+    const server = new McpServer({ name: "t", version: "0.0.0" });
+    // The cast smuggles the colliding field past the compile-time guard so the
+    // runtime guard (the last line of defence for untyped callers) is exercised.
+    const colliding = { confirm: z.boolean().optional() } as unknown as Record<string, never>;
+    expect(() =>
+      registerMutation(server, deps, {
+        name: "bad_mutation",
+        title: "Bad",
+        description: "Bad",
+        inputSchema: colliding,
+        method: "POST",
+        path: () => "/api/x",
+        previewAction: () => "Would x.",
+        buildBody: () => ({}),
+      }),
+    ).toThrow(/confirm/);
+  });
+
+  it("rejects a delete manifest that declares its own confirm field", () => {
+    const server = new McpServer({ name: "t", version: "0.0.0" });
+    const colliding = { x_id: z.string(), confirm: z.boolean() } as unknown as {
+      x_id: z.ZodString;
+    };
+    expect(() =>
+      registerDelete(server, deps, {
+        name: "bad_delete",
+        title: "Bad",
+        description: "Bad",
+        inputSchema: colliding,
+        path: ({ x_id }) => `/api/x/${x_id}`,
+        label: "x",
+        idField: "x_id",
+      }),
+    ).toThrow(/confirm/);
+  });
+
+  it("rejects a confirm-declaring manifest at the type level", () => {
+    const shape = { confirm: z.boolean().optional() };
+    // @ts-expect-error — `confirm` is reserved by the registry guardrail
+    type RejectedMutation = MutationManifest<typeof shape>;
+    // @ts-expect-error — `confirm` is reserved by the registry guardrail
+    type RejectedDelete = DeleteManifest<typeof shape>;
+    // Type-only assertions; the runtime guard is exercised above.
+    expect(shape.confirm).toBeDefined();
   });
 });

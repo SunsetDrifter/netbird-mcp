@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ZodRawShapeCompat, ShapeOutput } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -20,6 +21,14 @@ export interface ToolDeps {
  * these for free just by being written as a manifest, and cannot skip them.
  */
 
+/**
+ * Input shape a write manifest may declare: domain fields only. The guardrail's
+ * `confirm` field is reserved by the registry, so a manifest declaring it is
+ * rejected at compile time; the runtime guard in withConfirmField backs this up
+ * for untyped callers.
+ */
+type DomainShape = ZodRawShapeCompat & { confirm?: never };
+
 interface ManifestBase<Args extends ZodRawShapeCompat> {
   name: string;
   title: string;
@@ -36,7 +45,7 @@ export interface ReadManifest<Args extends ZodRawShapeCompat = Record<string, ne
   transformResponse?: (data: unknown, args: ShapeOutput<Args>) => unknown;
 }
 
-export interface MutationManifest<Args extends ZodRawShapeCompat> extends ManifestBase<Args> {
+export interface MutationManifest<Args extends DomainShape> extends ManifestBase<Args> {
   inputSchema: Args;
   method: "POST" | "PUT";
   path: (args: ShapeOutput<Args>) => string;
@@ -50,7 +59,7 @@ export interface MutationManifest<Args extends ZodRawShapeCompat> extends Manife
   buildBody: (args: ShapeOutput<Args>) => Record<string, unknown>;
 }
 
-export interface DeleteManifest<Args extends ZodRawShapeCompat> extends ManifestBase<Args> {
+export interface DeleteManifest<Args extends DomainShape> extends ManifestBase<Args> {
   inputSchema: Args;
   path: (args: ShapeOutput<Args>) => string;
   /** Domain label used in generated preview/result text, e.g. "peer". */
@@ -114,6 +123,41 @@ function isConfirmed(args: ShapeOutput<ZodRawShapeCompat>): boolean {
   return (args as Record<string, unknown>).confirm === true;
 }
 
+/** The single field name the draft-and-confirm guardrail owns. */
+const CONFIRM_FIELD = "confirm";
+
+/**
+ * The guardrail field a mutation advertises: optional, because a mutation
+ * previews when it is omitted and applies when it is true.
+ */
+const MUTATION_CONFIRM = z.boolean().optional().describe("Set true to apply the change.");
+
+/**
+ * The guardrail field a delete advertises: required, so a delete cannot be
+ * issued without explicitly opting in.
+ */
+const DELETE_CONFIRM = z.boolean().describe("Must be true to delete.");
+
+/**
+ * Return a new input shape with the guardrail's `confirm` field injected, so
+ * every write tool advertises confirm without its manifest declaring one. The
+ * manifest's own schema is never mutated. Throws if the manifest already
+ * declares `confirm` — a manifest may only declare domain fields, so the
+ * guardrail field can never silently collide with one.
+ */
+function withConfirmField<Args extends DomainShape>(
+  inputSchema: Args,
+  confirmSchema: z.ZodTypeAny,
+): Args & { confirm: z.ZodTypeAny } {
+  if (Object.prototype.hasOwnProperty.call(inputSchema, CONFIRM_FIELD)) {
+    throw new Error(
+      `Tool manifest declares its own "${CONFIRM_FIELD}" field; the registry injects ` +
+        "the draft-and-confirm guardrail, so manifests must declare only domain fields.",
+    );
+  }
+  return { ...inputSchema, confirm: confirmSchema };
+}
+
 /** Register a read-only tool: a straight GET, optionally with query params or a response transform. */
 export function registerRead<Args extends ZodRawShapeCompat = Record<string, never>>(
   server: McpServer,
@@ -141,7 +185,7 @@ export function registerRead<Args extends ZodRawShapeCompat = Record<string, nev
  * confirm means a preview and zero API calls; confirm sends the body — with
  * undefined fields stripped — via the declared method and path.
  */
-export function registerMutation<Args extends ZodRawShapeCompat>(
+export function registerMutation<Args extends DomainShape>(
   server: McpServer,
   deps: ToolDeps,
   manifest: MutationManifest<Args>,
@@ -151,7 +195,7 @@ export function registerMutation<Args extends ZodRawShapeCompat>(
     {
       title: manifest.title,
       description: manifest.description,
-      inputSchema: manifest.inputSchema,
+      inputSchema: withConfirmField(manifest.inputSchema, MUTATION_CONFIRM),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     (async (args: ShapeOutput<Args>) =>
@@ -173,11 +217,15 @@ export function registerMutation<Args extends ZodRawShapeCompat>(
  * operations are disabled in server configuration; when enabled, still
  * requires draft-and-confirm — enabling the feature never bypasses the guardrail.
  */
-export function registerDelete<Args extends ZodRawShapeCompat>(
+export function registerDelete<Args extends DomainShape>(
   server: McpServer,
   deps: ToolDeps,
   manifest: DeleteManifest<Args>,
 ): void {
+  // Build the advertised schema first: the collision guard is a manifest-
+  // correctness check, so it must fire even in read-only deployments where the
+  // tool is never registered.
+  const inputSchema = withConfirmField(manifest.inputSchema, DELETE_CONFIRM);
   if (!deps.config.enableDestructive) return;
 
   server.registerTool(
@@ -185,7 +233,7 @@ export function registerDelete<Args extends ZodRawShapeCompat>(
     {
       title: manifest.title,
       description: manifest.description,
-      inputSchema: manifest.inputSchema,
+      inputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     (async (args: ShapeOutput<Args>) =>

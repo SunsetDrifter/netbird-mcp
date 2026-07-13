@@ -1,12 +1,19 @@
 import { describe, it, expect, vi } from "vitest";
 import { OAuthCore, type OAuthCoreOptions } from "../src/oauth/core.js";
+import { DEFAULT_MAX_REQUESTS_PER_MINUTE, DEFAULT_REQUEST_TIMEOUT_MS } from "../src/config.js";
 import { renderLoginPage, type LoginPageParams } from "../src/oauth/loginPage.js";
+import { InvalidGrantError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
-
-const silentLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+import { silentLogger, pkcePair } from "./helpers.js";
 
 function newCore(opts: Partial<OAuthCoreOptions> = {}): OAuthCore {
-  return new OAuthCore({ logger: silentLogger, verifyPatOnLogin: false, ...opts });
+  return new OAuthCore({
+    logger: silentLogger,
+    verifyPatOnLogin: false,
+    maxRequestsPerMinute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
+    requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+    ...opts,
+  });
 }
 
 function registerClient(
@@ -109,11 +116,12 @@ describe("OAuthCore.completeLogin", () => {
   it("issues a redirect whose code exchanges for tokens with the right binding", async () => {
     const core = newCore();
     const client = registerClient(core);
+    const { verifier, challenge } = pkcePair();
 
     const decision = await core.completeLogin({
       clientId: client.client_id,
       redirectUri: client.redirect_uris[0],
-      codeChallenge: "chal",
+      codeChallenge: challenge,
       state: "s1",
       scope: "netbird",
       netbirdToken: "pat-abc",
@@ -128,8 +136,13 @@ describe("OAuthCore.completeLogin", () => {
     const code = url.searchParams.get("code")!;
     expect(code).toBeTruthy();
 
-    expect(core.challengeForCode(code)).toBe("chal");
-    const tokens = core.exchangeAuthorizationCode(client.client_id, code, client.redirect_uris[0]);
+    expect(core.challengeForCode(code)).toBe(challenge);
+    const tokens = core.exchangeAuthorizationCode(
+      client.client_id,
+      code,
+      verifier,
+      client.redirect_uris[0],
+    );
     expect(tokens.access_token).toBeTruthy();
 
     const auth = core.resolveBinding(tokens.access_token);
@@ -217,6 +230,84 @@ describe("OAuthCore.completeLogin", () => {
   });
 });
 
+describe("OAuthCore.exchangeAuthorizationCode — PKCE re-verification (defence in depth)", () => {
+  async function mintCode(core: OAuthCore, client: OAuthClientInformationFull, challenge: string) {
+    const decision = await core.completeLogin({
+      clientId: client.client_id,
+      redirectUri: client.redirect_uris[0],
+      codeChallenge: challenge,
+      netbirdToken: "pat-abc",
+      netbirdApiUrl: "https://self.hosted",
+    });
+    const location = (decision as { location: string }).location;
+    return new URL(location).searchParams.get("code")!;
+  }
+
+  it("rejects a wrong code verifier with invalid_grant", async () => {
+    const core = newCore();
+    const client = registerClient(core);
+    const { challenge } = pkcePair();
+    const code = await mintCode(core, client, challenge);
+
+    expect(() =>
+      core.exchangeAuthorizationCode(
+        client.client_id,
+        code,
+        "the-wrong-verifier",
+        client.redirect_uris[0],
+      ),
+    ).toThrow(InvalidGrantError);
+  });
+
+  it("rejects a missing code verifier with invalid_grant", async () => {
+    const core = newCore();
+    const client = registerClient(core);
+    const { challenge } = pkcePair();
+    const code = await mintCode(core, client, challenge);
+
+    expect(() =>
+      core.exchangeAuthorizationCode(client.client_id, code, undefined, client.redirect_uris[0]),
+    ).toThrow(InvalidGrantError);
+  });
+
+  it("fails a wrong verifier even when challengeForCode was never called first", async () => {
+    const core = newCore();
+    const client = registerClient(core);
+    const { challenge } = pkcePair();
+    const code = await mintCode(core, client, challenge);
+
+    // No prior challengeForCode/challengeForAuthorizationCode call: the re-check
+    // must not depend on the SDK having looked the challenge up first.
+    expect(() =>
+      core.exchangeAuthorizationCode(
+        client.client_id,
+        code,
+        "the-wrong-verifier",
+        client.redirect_uris[0],
+      ),
+    ).toThrow(InvalidGrantError);
+  });
+
+  it("accepts the correct verifier end-to-end through the real login flow", async () => {
+    const core = newCore();
+    const client = registerClient(core);
+    const { verifier, challenge } = pkcePair();
+    const code = await mintCode(core, client, challenge);
+
+    const tokens = core.exchangeAuthorizationCode(
+      client.client_id,
+      code,
+      verifier,
+      client.redirect_uris[0],
+    );
+    expect(tokens.access_token).toBeTruthy();
+    expect(core.resolveBinding(tokens.access_token)).toEqual({
+      token: "pat-abc",
+      baseUrl: "https://self.hosted",
+    });
+  });
+});
+
 describe("login page XSS escaping (via the core's decision output)", () => {
   it("escapes a hostile state value reflected in a login challenge", () => {
     const core = newCore();
@@ -300,6 +391,51 @@ describe("OAuthCore.completeLogin — API URL validation and indeterminate verif
       await vi.runAllTimersAsync();
       const decision = await pending;
       expect(decision.kind).toBe("redirect");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("OAuthCore — configured rate limit governs login-path PAT verification", () => {
+  function loginForm(client: OAuthClientInformationFull, netbirdToken: string) {
+    return {
+      clientId: client.client_id,
+      redirectUri: client.redirect_uris[0],
+      codeChallenge: "c1",
+      state: "s1",
+      netbirdToken,
+      netbirdApiUrl: "https://api.netbird.io",
+    };
+  }
+
+  it("shares a maxRequestsPerMinute=1 limiter across logins, delaying the second verification", async () => {
+    const acceptingFetch = vi.fn(async () => jsonResponse([{ id: "u1" }])) as unknown as typeof fetch;
+    const core = newCore({
+      verifyPatOnLogin: true,
+      maxRequestsPerMinute: 1,
+      fetchImpl: acceptingFetch,
+    });
+    const client = registerClient(core);
+
+    vi.useFakeTimers();
+    try {
+      // First login consumes the single slot in the shared verify limiter.
+      const first = await core.completeLogin(loginForm(client, "pat-1"));
+      expect(first.kind).toBe("redirect");
+      expect(acceptingFetch).toHaveBeenCalledTimes(1);
+
+      // Second login must wait for the sliding window before its PAT check fires.
+      const pending = core.completeLogin(loginForm(client, "pat-2"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(acceptingFetch).toHaveBeenCalledTimes(1);
+
+      // Advancing past the one-minute window releases the throttled verification.
+      await vi.advanceTimersByTimeAsync(61_000);
+      const second = await pending;
+      expect(second.kind).toBe("redirect");
+      expect(acceptingFetch).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
