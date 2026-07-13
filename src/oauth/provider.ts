@@ -11,9 +11,10 @@ import type {
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { normalizeBaseUrl } from "../config.js";
 import type { Logger } from "../logger.js";
+import { AuthContext, AuthError } from "../auth/context.js";
 import { NetBirdClient } from "../netbird/client.js";
 import { RateLimiter } from "../netbird/rateLimiter.js";
-import { ACCESS_TTL_SECONDS, OAuthStore } from "./store.js";
+import { ACCESS_TTL_SECONDS, OAuthStore, type NetBirdBinding } from "./store.js";
 import { renderLoginPage } from "./loginPage.js";
 
 // Defaults for the short-lived client built solely to verify a PAT at login
@@ -212,6 +213,25 @@ export class NetBirdOAuthProvider implements OAuthServerProvider {
       // The bound NetBird credential travels here; the /mcp handler reads it.
       extra: { netbirdToken: rec.netbirdToken, baseUrl: rec.baseUrl },
     };
+  }
+
+  /**
+   * Resolve a Bearer access token straight to the NetBird credential it's bound
+   * to. Wraps verifyAccessToken (which the SDK requires) so the untyped `extra`
+   * bag it returns never crosses this seam — callers only ever see AuthContext.
+   */
+  async resolveBinding(bearerToken: string): Promise<AuthContext> {
+    let info: AuthInfo;
+    try {
+      info = await this.verifyAccessToken(bearerToken);
+    } catch {
+      throw new AuthError("Invalid or expired access token.", "unknown_token");
+    }
+    const binding = info.extra as unknown as NetBirdBinding | undefined;
+    if (!binding?.netbirdToken || !binding.baseUrl) {
+      throw new AuthError("Invalid or expired access token.", "unknown_token");
+    }
+    return { token: binding.netbirdToken, baseUrl: binding.baseUrl };
   }
 
   async revokeToken(

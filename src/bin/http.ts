@@ -6,7 +6,7 @@ import {
   mcpAuthRouter,
   getOAuthProtectedResourceMetadataUrl,
 } from "@modelcontextprotocol/sdk/server/auth/router.js";
-import { authFromRequest } from "../auth/fromRequest.js";
+import { resolveAuth } from "../auth/resolve.js";
 import { AuthContext, AuthError } from "../auth/context.js";
 import { loadServerConfig } from "../config.js";
 import { createLogger } from "../logger.js";
@@ -18,11 +18,8 @@ import { NetBirdOAuthProvider } from "../oauth/provider.js";
  * CLOUD entrypoint. Speaks MCP over Streamable HTTP so the server can be hosted
  * and added to Claude as a remote/custom connector.
  *
- * Two ways to authenticate, both resolving to a per-request NetBird AuthContext:
- *   1. OAuth 2.1 (what Claude uses): the client registers dynamically, runs an
- *      authorization-code + PKCE flow, and sends `Authorization: Bearer <token>`.
- *   2. Direct PAT (handy for testing / simple deploys): `x-netbird-token` header
- *      or `Authorization: Token <pat>`.
+ * Auth (Bearer-vs-Token dispatch, OAuth binding resolution) lives in
+ * ../auth/resolve.js — this file only wires transport.
  *
  * Stateless: each request gets a fresh server instance, so one deployment safely
  * serves many tenants and scales horizontally.
@@ -73,27 +70,14 @@ if (oauthEnabled) {
   app.post("/oauth/netbird-login", provider.handleLogin);
 }
 
-/** Resolve a request to a NetBird AuthContext, or throw AuthError. */
-async function resolveAuth(req: express.Request): Promise<AuthContext> {
-  const authz = req.headers.authorization;
-  if (oauthEnabled && authz && /^Bearer\s+/i.test(authz)) {
-    const token = authz.replace(/^Bearer\s+/i, "").trim();
-    try {
-      const info = await provider.verifyAccessToken(token);
-      const extra = info.extra as { netbirdToken: string; baseUrl: string };
-      return { token: extra.netbirdToken, baseUrl: extra.baseUrl };
-    } catch {
-      throw new AuthError("Invalid or expired access token.");
-    }
-  }
-  // Direct-PAT fallback (x-netbird-token or Authorization: Token).
-  return authFromRequest(req.headers, { tokenHeader, urlHeader });
-}
-
 app.post("/mcp", async (req, res) => {
   let auth: AuthContext;
   try {
-    auth = await resolveAuth(req);
+    auth = await resolveAuth(req.headers, {
+      provider: oauthEnabled ? provider : undefined,
+      tokenHeader,
+      urlHeader,
+    });
   } catch (err) {
     if (err instanceof AuthError) {
       // Point unauthenticated clients at the resource metadata so Claude can
