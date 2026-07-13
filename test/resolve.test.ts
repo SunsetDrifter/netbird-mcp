@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import { resolveAuth } from "../src/auth/resolve.js";
 import { NetBirdOAuthProvider } from "../src/oauth/provider.js";
@@ -5,6 +6,10 @@ import { AuthError } from "../src/auth/context.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
 
 const silentLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+
+// A real PKCE pair: the code exchange re-verifies S256(verifier) === challenge.
+const VERIFIER = "resolve-test-code-verifier-abcdefghijklmnopqrstuvwxyz0123456789";
+const CHALLENGE = createHash("sha256").update(VERIFIER).digest("base64url");
 
 function newProvider(): NetBirdOAuthProvider {
   return new NetBirdOAuthProvider({ logger: silentLogger, verifyPatOnLogin: false });
@@ -30,7 +35,7 @@ async function mintAccessToken(
     body: {
       client_id: client.client_id,
       redirect_uri: client.redirect_uris[0],
-      code_challenge: "challenge",
+      code_challenge: CHALLENGE,
       scope: "netbird",
       netbird_token: binding.netbirdToken,
       netbird_api_url: binding.baseUrl,
@@ -56,7 +61,7 @@ async function mintAccessToken(
   const tokens = await provider.exchangeAuthorizationCode(
     client,
     code,
-    "verifier",
+    VERIFIER,
     client.redirect_uris[0],
   );
   return tokens.access_token;

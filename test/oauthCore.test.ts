@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import { OAuthCore, type OAuthCoreOptions } from "../src/oauth/core.js";
 import { renderLoginPage, type LoginPageParams } from "../src/oauth/loginPage.js";
@@ -20,6 +21,15 @@ function registerClient(
   } as OAuthClientInformationFull;
   core.registerClient(client);
   return client;
+}
+
+/** A real PKCE verifier/challenge pair: challenge = base64url(sha256(verifier)). */
+function pkcePair(verifier = "test-code-verifier-abcdefghijklmnopqrstuvwxyz012345"): {
+  verifier: string;
+  challenge: string;
+} {
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  return { verifier, challenge };
 }
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
@@ -109,11 +119,12 @@ describe("OAuthCore.completeLogin", () => {
   it("issues a redirect whose code exchanges for tokens with the right binding", async () => {
     const core = newCore();
     const client = registerClient(core);
+    const { verifier, challenge } = pkcePair();
 
     const decision = await core.completeLogin({
       clientId: client.client_id,
       redirectUri: client.redirect_uris[0],
-      codeChallenge: "chal",
+      codeChallenge: challenge,
       state: "s1",
       scope: "netbird",
       netbirdToken: "pat-abc",
@@ -128,8 +139,13 @@ describe("OAuthCore.completeLogin", () => {
     const code = url.searchParams.get("code")!;
     expect(code).toBeTruthy();
 
-    expect(core.challengeForCode(code)).toBe("chal");
-    const tokens = core.exchangeAuthorizationCode(client.client_id, code, client.redirect_uris[0]);
+    expect(core.challengeForCode(code)).toBe(challenge);
+    const tokens = core.exchangeAuthorizationCode(
+      client.client_id,
+      code,
+      verifier,
+      client.redirect_uris[0],
+    );
     expect(tokens.access_token).toBeTruthy();
 
     const auth = core.resolveBinding(tokens.access_token);
@@ -214,6 +230,84 @@ describe("OAuthCore.completeLogin", () => {
     const errorDecision = decision as { reason: string } & LoginPageParams;
     expect(errorDecision.reason).toMatch(/rejected/i);
     expect(() => renderLoginPage(prefillOf(errorDecision), errorDecision.reason)).not.toThrow();
+  });
+});
+
+describe("OAuthCore.exchangeAuthorizationCode — PKCE re-verification (defence in depth)", () => {
+  async function mintCode(core: OAuthCore, client: OAuthClientInformationFull, challenge: string) {
+    const decision = await core.completeLogin({
+      clientId: client.client_id,
+      redirectUri: client.redirect_uris[0],
+      codeChallenge: challenge,
+      netbirdToken: "pat-abc",
+      netbirdApiUrl: "https://self.hosted",
+    });
+    const location = (decision as { location: string }).location;
+    return new URL(location).searchParams.get("code")!;
+  }
+
+  it("rejects a wrong code verifier with invalid_grant", async () => {
+    const core = newCore();
+    const client = registerClient(core);
+    const { challenge } = pkcePair();
+    const code = await mintCode(core, client, challenge);
+
+    expect(() =>
+      core.exchangeAuthorizationCode(
+        client.client_id,
+        code,
+        "the-wrong-verifier",
+        client.redirect_uris[0],
+      ),
+    ).toThrow(/invalid_grant/);
+  });
+
+  it("rejects a missing code verifier with invalid_grant", async () => {
+    const core = newCore();
+    const client = registerClient(core);
+    const { challenge } = pkcePair();
+    const code = await mintCode(core, client, challenge);
+
+    expect(() =>
+      core.exchangeAuthorizationCode(client.client_id, code, undefined, client.redirect_uris[0]),
+    ).toThrow(/invalid_grant/);
+  });
+
+  it("fails a wrong verifier even when challengeForCode was never called first", async () => {
+    const core = newCore();
+    const client = registerClient(core);
+    const { challenge } = pkcePair();
+    const code = await mintCode(core, client, challenge);
+
+    // No prior challengeForCode/challengeForAuthorizationCode call: the re-check
+    // must not depend on the SDK having looked the challenge up first.
+    expect(() =>
+      core.exchangeAuthorizationCode(
+        client.client_id,
+        code,
+        "the-wrong-verifier",
+        client.redirect_uris[0],
+      ),
+    ).toThrow(/invalid_grant/);
+  });
+
+  it("accepts the correct verifier end-to-end through the real login flow", async () => {
+    const core = newCore();
+    const client = registerClient(core);
+    const { verifier, challenge } = pkcePair();
+    const code = await mintCode(core, client, challenge);
+
+    const tokens = core.exchangeAuthorizationCode(
+      client.client_id,
+      code,
+      verifier,
+      client.redirect_uris[0],
+    );
+    expect(tokens.access_token).toBeTruthy();
+    expect(core.resolveBinding(tokens.access_token)).toEqual({
+      token: "pat-abc",
+      baseUrl: "https://self.hosted",
+    });
   });
 });
 
