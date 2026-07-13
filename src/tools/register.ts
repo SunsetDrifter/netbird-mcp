@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ToolDeps } from "./helpers.js";
+import type { ToolDeps } from "./registry.js";
 import { registerPeerTools } from "./peers.js";
 import { registerSetupKeyTools } from "./setupKeys.js";
 import { registerGroupTools } from "./groups.js";

@@ -6,7 +6,7 @@ import {
   mcpAuthRouter,
   getOAuthProtectedResourceMetadataUrl,
 } from "@modelcontextprotocol/sdk/server/auth/router.js";
-import { authFromRequest } from "../auth/fromRequest.js";
+import { resolveAuth } from "../auth/resolve.js";
 import { AuthContext, AuthError } from "../auth/context.js";
 import { loadServerConfig } from "../config.js";
 import { createLogger } from "../logger.js";
@@ -18,33 +18,18 @@ import { NetBirdOAuthProvider } from "../oauth/provider.js";
  * CLOUD entrypoint. Speaks MCP over Streamable HTTP so the server can be hosted
  * and added to Claude as a remote/custom connector.
  *
- * Two ways to authenticate, both resolving to a per-request NetBird AuthContext:
- *   1. OAuth 2.1 (what Claude uses): the client registers dynamically, runs an
- *      authorization-code + PKCE flow, and sends `Authorization: Bearer <token>`.
- *   2. Direct PAT (handy for testing / simple deploys): `x-netbird-token` header
- *      or `Authorization: Token <pat>`.
+ * Auth (Bearer-vs-Token dispatch, OAuth binding resolution) lives in
+ * ../auth/resolve.js — this file only wires transport.
  *
  * Stateless: each request gets a fresh server instance, so one deployment safely
  * serves many tenants and scales horizontally.
  */
 const config = loadServerConfig();
 const logger = createLogger(config.logLevel);
-const port = Number(process.env.PORT ?? 3000);
-const tokenHeader = process.env.NETBIRD_TOKEN_HEADER ?? "x-netbird-token";
-const urlHeader = process.env.NETBIRD_URL_HEADER ?? "x-netbird-api-url";
-const oauthEnabled = (process.env.NETBIRD_ENABLE_OAUTH ?? "true").toLowerCase() !== "false";
+const { port, tokenHeader, urlHeader, oauthEnabled, publicBaseUrl, verifyPatOnLogin } =
+  config.http;
 
-// Public origin the AS advertises in its metadata. Must be the externally reachable
-// URL. Defaults to localhost for local testing (localhost is exempt from the HTTPS rule).
-const publicBaseUrl = (process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}`).replace(
-  /\/+$/,
-  "",
-);
-
-const provider = new NetBirdOAuthProvider({
-  logger,
-  verifyPatOnLogin: (process.env.NETBIRD_VERIFY_PAT_ON_LOGIN ?? "true").toLowerCase() !== "false",
-});
+const provider = new NetBirdOAuthProvider({ logger, verifyPatOnLogin });
 
 // One rate limiter per tenant (keyed by a hash of the NetBird token, never the token
 // itself), so NetBird's per-account limit is respected without cross-tenant interference.
@@ -85,27 +70,14 @@ if (oauthEnabled) {
   app.post("/oauth/netbird-login", provider.handleLogin);
 }
 
-/** Resolve a request to a NetBird AuthContext, or throw AuthError. */
-async function resolveAuth(req: express.Request): Promise<AuthContext> {
-  const authz = req.headers.authorization;
-  if (oauthEnabled && authz && /^Bearer\s+/i.test(authz)) {
-    const token = authz.replace(/^Bearer\s+/i, "").trim();
-    try {
-      const info = await provider.verifyAccessToken(token);
-      const extra = info.extra as { netbirdToken: string; baseUrl: string };
-      return { token: extra.netbirdToken, baseUrl: extra.baseUrl };
-    } catch {
-      throw new AuthError("Invalid or expired access token.");
-    }
-  }
-  // Direct-PAT fallback (x-netbird-token or Authorization: Token).
-  return authFromRequest(req.headers, { tokenHeader, urlHeader });
-}
-
 app.post("/mcp", async (req, res) => {
   let auth: AuthContext;
   try {
-    auth = await resolveAuth(req);
+    auth = await resolveAuth(req.headers, {
+      provider: oauthEnabled ? provider : undefined,
+      tokenHeader,
+      urlHeader,
+    });
   } catch (err) {
     if (err instanceof AuthError) {
       // Point unauthenticated clients at the resource metadata so Claude can

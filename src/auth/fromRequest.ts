@@ -9,7 +9,7 @@ export interface RequestAuthOptions {
   urlHeader?: string;
 }
 
-function headerValue(headers: IncomingHttpHeaders, name: string): string | undefined {
+export function headerValue(headers: IncomingHttpHeaders, name: string): string | undefined {
   const v = headers[name.toLowerCase()];
   return Array.isArray(v) ? v[0] : v;
 }
@@ -33,15 +33,16 @@ export function authFromRequest(
   const tokenHeader = opts.tokenHeader ?? "x-netbird-token";
   const urlHeader = opts.urlHeader ?? "x-netbird-api-url";
 
+  const authz = headerValue(headers, "authorization")?.trim();
   let token = headerValue(headers, tokenHeader)?.trim();
-  if (!token) {
-    const authz = headerValue(headers, "authorization")?.trim();
-    if (authz && /^Token\s+/i.test(authz)) token = authz.replace(/^Token\s+/i, "").trim();
+  if (!token && authz && /^Token\s+/i.test(authz)) {
+    token = authz.replace(/^Token\s+/i, "").trim();
   }
   if (!token) {
     throw new AuthError(
       `Missing NetBird token. Provide it in the "${tokenHeader}" header or as ` +
         `"Authorization: Token <pat>".`,
+      authz ? "wrong_scheme" : "missing_credentials",
     );
   }
 

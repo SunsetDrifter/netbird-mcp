@@ -32,6 +32,12 @@ interface RequestOptions {
   body?: unknown;
 }
 
+/** Cheap authenticated read used to check whether a token can authenticate. */
+const USERS_PATH = "/api/users";
+
+/** Outcome of a token-verification call: valid, rejected, or indeterminate. */
+export type TokenVerification = "ok" | "invalid" | "unknown";
+
 /**
  * Thin REST client for the NetBird public API. Handles auth, timeouts, a
  * client-side rate limit, and exponential backoff on 429/5xx (honoring
@@ -60,6 +66,25 @@ export class NetBirdClient {
 
   delete<T = unknown>(path: string): Promise<T> {
     return this.request<T>(path, { method: "DELETE" });
+  }
+
+  /**
+   * Verifies that this client's credentials can authenticate against its base
+   * URL, via the same auth header, timeout, retry, and rate-limit path as every
+   * other call. Maps the outcome to a three-state result: "ok" on success,
+   * "invalid" on 401/403, and "unknown" for anything else (timeouts, network
+   * failures, 5xx, or other unexpected errors).
+   */
+  async verifyToken(): Promise<TokenVerification> {
+    try {
+      await this.get(USERS_PATH);
+      return "ok";
+    } catch (err) {
+      if (err instanceof NetBirdApiError && (err.status === 401 || err.status === 403)) {
+        return "invalid";
+      }
+      return "unknown";
+    }
   }
 
   private buildUrl(path: string, query?: RequestOptions["query"]): string {

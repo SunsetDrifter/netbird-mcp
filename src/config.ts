@@ -1,11 +1,32 @@
 /**
- * Central configuration. Only entrypoints (bin/*) read the environment; the rest
- * of the server receives resolved values so tool logic stays transport-agnostic.
+ * Central configuration. All environment parsing happens behind loadServerConfig();
+ * entrypoints (bin/*) call it and pass resolved values everywhere else, so tool
+ * logic and transport wiring stay transport-agnostic.
  */
 
 export const DEFAULT_NETBIRD_API_URL = "https://api.netbird.io";
+/** Client-side cap kept under NetBird Cloud's 120 req/min limit. */
+export const DEFAULT_MAX_REQUESTS_PER_MINUTE = 110;
+/** Per-request timeout for NetBird calls, in ms. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
+
+/** HTTP (cloud) entrypoint settings — unused by the stdio entrypoint. */
+export interface HttpConfig {
+  /** Port the Streamable HTTP server listens on. */
+  port: number;
+  /** Header carrying a direct NetBird PAT (fallback auth path). */
+  tokenHeader: string;
+  /** Header carrying a per-tenant NetBird base URL override. */
+  urlHeader: string;
+  /** Whether the OAuth 2.1 authorization server is mounted. */
+  oauthEnabled: boolean;
+  /** Externally reachable origin the AS advertises in its metadata. */
+  publicBaseUrl: string;
+  /** Whether a PAT is verified against NetBird at OAuth login time. */
+  verifyPatOnLogin: boolean;
+}
 
 export interface ServerConfig {
   /** Enable destructive tools (delete_peer, delete_policy, delete_group). */
@@ -15,6 +36,7 @@ export interface ServerConfig {
   /** Per-request timeout for NetBird calls, in ms. */
   requestTimeoutMs: number;
   logLevel: LogLevel;
+  http: HttpConfig;
 }
 
 function boolEnv(value: string | undefined, fallback = false): boolean {
@@ -33,11 +55,25 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     ? (level as LogLevel)
     : "info";
 
+  // Port is resolved first: the public base URL default is derived from it.
+  // intEnv guards malformed values — a garbage PORT must not yield NaN here
+  // (it would poison the derived publicBaseUrl and the listen call).
+  const port = intEnv(env.PORT, 3000);
+  const publicBaseUrl = (env.PUBLIC_BASE_URL ?? `http://localhost:${port}`).replace(/\/+$/, "");
+
   return {
     enableDestructive: boolEnv(env.NETBIRD_ENABLE_DESTRUCTIVE, false),
-    maxRequestsPerMinute: intEnv(env.NETBIRD_MAX_RPM, 110),
-    requestTimeoutMs: intEnv(env.NETBIRD_TIMEOUT_MS, 30_000),
+    maxRequestsPerMinute: intEnv(env.NETBIRD_MAX_RPM, DEFAULT_MAX_REQUESTS_PER_MINUTE),
+    requestTimeoutMs: intEnv(env.NETBIRD_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS),
     logLevel,
+    http: {
+      port,
+      tokenHeader: env.NETBIRD_TOKEN_HEADER ?? "x-netbird-token",
+      urlHeader: env.NETBIRD_URL_HEADER ?? "x-netbird-api-url",
+      oauthEnabled: boolEnv(env.NETBIRD_ENABLE_OAUTH, true),
+      publicBaseUrl,
+      verifyPatOnLogin: boolEnv(env.NETBIRD_VERIFY_PAT_ON_LOGIN, true),
+    },
   };
 }
 

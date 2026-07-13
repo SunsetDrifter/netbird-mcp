@@ -11,9 +11,15 @@ export interface AuthContext {
   baseUrl: string;
 }
 
+/** Machine-readable reason for an AuthError, for transports to map uniformly. */
+export type AuthErrorCode = "missing_credentials" | "unknown_token" | "wrong_scheme" | "oauth_disabled";
+
 export class AuthError extends Error {
-  constructor(message: string) {
+  readonly code: AuthErrorCode;
+
+  constructor(message: string, code: AuthErrorCode = "missing_credentials") {
     super(message);
     this.name = "AuthError";
+    this.code = code;
   }
 }
