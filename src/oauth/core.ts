@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import {
@@ -209,14 +210,22 @@ export class OAuthCore {
   exchangeAuthorizationCode(
     clientId: string,
     authorizationCode: string,
+    codeVerifier?: string,
     redirectUri?: string,
   ): OAuthTokens {
-    // PKCE was already verified by the SDK token handler via challengeForCode.
     const rec = this.store.takeCode(authorizationCode);
     if (!rec) throw new Error("invalid_grant: unknown or expired authorization code");
     if (rec.clientId !== clientId) throw new Error("invalid_grant: client mismatch");
     if (redirectUri && redirectUri !== rec.redirectUri) {
       throw new Error("invalid_grant: redirect_uri mismatch");
+    }
+    // Re-verify PKCE ourselves after consuming the code. The SDK's token handler
+    // already checked this via challengeForCode, but recomputing the S256
+    // challenge from the supplied verifier here — with no dependence on any prior
+    // lookup — means a future SDK reordering its internal calls can never let a
+    // code be exchanged without a matching verifier.
+    if (!pkceMatches(codeVerifier, rec.codeChallenge)) {
+      throw new Error("invalid_grant: PKCE verification failed");
     }
 
     const { accessToken, refreshToken } = this.store.issueTokens(
@@ -303,6 +312,21 @@ export class OAuthCore {
     });
     return client.verifyToken();
   }
+}
+
+/**
+ * Recompute the S256 code challenge from the supplied verifier and compare it,
+ * in constant time, to the challenge bound to the authorization code. A missing
+ * verifier never matches. This is the module-internal PKCE re-check the exchange
+ * runs so PKCE cannot be silently skipped regardless of SDK call order.
+ */
+function pkceMatches(codeVerifier: string | undefined, storedChallenge: string): boolean {
+  if (!codeVerifier) return false;
+  const computed = createHash("sha256").update(codeVerifier).digest("base64url");
+  const a = Buffer.from(computed);
+  const b = Buffer.from(storedChallenge);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 /** The login form's API URL is untrusted input and becomes a fetch target — accept only http(s). */

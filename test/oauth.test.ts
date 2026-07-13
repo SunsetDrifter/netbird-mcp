@@ -1,8 +1,13 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import { NetBirdOAuthProvider, type ProviderOptions } from "../src/oauth/provider.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
 
 const silentLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+
+// A real PKCE pair: the exchange re-verifies S256(verifier) === stored challenge.
+const VERIFIER = "oauth-test-code-verifier-abcdefghijklmnopqrstuvwxyz0123456789";
+const CHALLENGE = createHash("sha256").update(VERIFIER).digest("base64url");
 
 function newProvider(opts: Partial<ProviderOptions> = {}) {
   return new NetBirdOAuthProvider({ logger: silentLogger, verifyPatOnLogin: false, ...opts });
@@ -60,7 +65,7 @@ async function mintCode(
   const { req, res, state } = fakeLoginReqRes({
     client_id: client.client_id,
     redirect_uri: client.redirect_uris[0],
-    code_challenge: binding.codeChallenge ?? "challenge",
+    code_challenge: binding.codeChallenge ?? CHALLENGE,
     scope: binding.scope ?? "netbird",
     netbird_token: binding.netbirdToken,
     netbird_api_url: binding.baseUrl,
@@ -86,9 +91,9 @@ describe("NetBirdOAuthProvider", () => {
     });
 
     // SDK verifies PKCE separately; the challenge must be retrievable pre-exchange.
-    expect(await p.challengeForAuthorizationCode(client, code)).toBe("challenge");
+    expect(await p.challengeForAuthorizationCode(client, code)).toBe(CHALLENGE);
 
-    const tokens = await p.exchangeAuthorizationCode(client, code, "verifier", client.redirect_uris[0]);
+    const tokens = await p.exchangeAuthorizationCode(client, code, VERIFIER, client.redirect_uris[0]);
     expect(tokens.token_type).toBe("Bearer");
     expect(tokens.access_token).toBeTruthy();
     expect(tokens.refresh_token).toBeTruthy();
@@ -104,12 +109,11 @@ describe("NetBirdOAuthProvider", () => {
     const code = await mintCode(p, client, {
       netbirdToken: "pat",
       baseUrl: "https://api.netbird.io",
-      codeChallenge: "c",
       scope: "",
     });
-    await p.exchangeAuthorizationCode(client, code, "v", client.redirect_uris[0]);
+    await p.exchangeAuthorizationCode(client, code, VERIFIER, client.redirect_uris[0]);
     await expect(
-      p.exchangeAuthorizationCode(client, code, "v", client.redirect_uris[0]),
+      p.exchangeAuthorizationCode(client, code, VERIFIER, client.redirect_uris[0]),
     ).rejects.toThrow(/invalid_grant/);
   });
 
@@ -119,9 +123,8 @@ describe("NetBirdOAuthProvider", () => {
     const code = await mintCode(p, client, {
       netbirdToken: "pat-xyz",
       baseUrl: "https://self.hosted",
-      codeChallenge: "c",
     });
-    const first = await p.exchangeAuthorizationCode(client, code, "v", client.redirect_uris[0]);
+    const first = await p.exchangeAuthorizationCode(client, code, VERIFIER, client.redirect_uris[0]);
     const refreshed = await p.exchangeRefreshToken(client, first.refresh_token!);
 
     expect(refreshed.access_token).not.toBe(first.access_token);

@@ -102,10 +102,15 @@ export class NetBirdOAuthProvider implements OAuthServerProvider {
   async exchangeAuthorizationCode(
     client: OAuthClientInformationFull,
     authorizationCode: string,
-    _codeVerifier?: string,
+    codeVerifier?: string,
     redirectUri?: string,
   ): Promise<OAuthTokens> {
-    return this.core.exchangeAuthorizationCode(client.client_id, authorizationCode, redirectUri);
+    return this.core.exchangeAuthorizationCode(
+      client.client_id,
+      authorizationCode,
+      codeVerifier,
+      redirectUri,
+    );
   }
 
   async exchangeRefreshToken(
