@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ToolDeps, guard, ok, preview } from "./helpers.js";
+import { registerRead, registerMutation, registerDelete, type ToolDeps } from "./registry.js";
 
 // NetBird policy rules are rich; accept a structured-but-flexible shape and pass
 // it through. The draft-and-confirm flow means the model shows the rule before it applies.
@@ -19,102 +19,72 @@ const ruleSchema = z
   .passthrough();
 
 export function registerPolicyTools(server: McpServer, deps: ToolDeps): void {
-  const { client, config } = deps;
+  registerRead(server, deps, {
+    name: "list_policies",
+    title: "List policies",
+    description:
+      'List access policies — "what can talk to what." Second highest-value read tool.',
+    path: () => "/api/policies",
+  });
 
-  server.registerTool(
-    "list_policies",
-    {
-      title: "List policies",
-      description:
-        'List access policies — "what can talk to what." Second highest-value read tool.',
-      inputSchema: {},
-      annotations: { readOnlyHint: true },
+  registerRead(server, deps, {
+    name: "get_policy",
+    title: "Get policy",
+    description: "Get one policy in full, including all its rules.",
+    inputSchema: { policy_id: z.string().describe("The policy ID.") },
+    path: ({ policy_id }) => `/api/policies/${encodeURIComponent(policy_id)}`,
+  });
+
+  registerMutation(server, deps, {
+    name: "create_policy",
+    title: "Create policy",
+    description:
+      "Create an access policy. Draft-and-confirm: preview shows the exact rule set; " +
+      "apply with confirm=true.",
+    inputSchema: {
+      name: z.string().describe("Policy name."),
+      description: z.string().optional(),
+      enabled: z.boolean().optional().default(true),
+      rules: z.array(ruleSchema).min(1).describe("One or more access rules."),
+      confirm: z.boolean().optional().describe("Set true to create the policy."),
     },
-    async () => guard(async () => ok(await client.get("/api/policies"))),
-  );
+    method: "POST",
+    path: () => "/api/policies",
+    previewAction: () => "Would create an access policy.",
+    buildBody: ({ name, description, enabled, rules }) => ({ name, description, enabled, rules }),
+  });
 
-  server.registerTool(
-    "get_policy",
-    {
-      title: "Get policy",
-      description: "Get one policy in full, including all its rules.",
-      inputSchema: { policy_id: z.string().describe("The policy ID.") },
-      annotations: { readOnlyHint: true },
+  registerMutation(server, deps, {
+    name: "update_policy",
+    title: "Update policy",
+    description:
+      "Update an access policy. Draft-and-confirm: preview shows the change; apply with confirm=true.",
+    inputSchema: {
+      policy_id: z.string().describe("The policy ID."),
+      name: z.string().optional(),
+      description: z.string().optional(),
+      enabled: z.boolean().optional(),
+      rules: z.array(ruleSchema).optional().describe("Full replacement rule set."),
+      confirm: z.boolean().optional().describe("Set true to apply the change."),
     },
-    async ({ policy_id }) =>
-      guard(async () => ok(await client.get(`/api/policies/${encodeURIComponent(policy_id)}`))),
-  );
+    method: "PUT",
+    path: ({ policy_id }) => `/api/policies/${encodeURIComponent(policy_id)}`,
+    previewAction: ({ policy_id }) => `Would update policy ${policy_id}.`,
+    buildBody: ({ name, description, enabled, rules }) => ({ name, description, enabled, rules }),
+  });
 
-  server.registerTool(
-    "create_policy",
-    {
-      title: "Create policy",
-      description:
-        "Create an access policy. Draft-and-confirm: preview shows the exact rule set; " +
-        "apply with confirm=true.",
-      inputSchema: {
-        name: z.string().describe("Policy name."),
-        description: z.string().optional(),
-        enabled: z.boolean().optional().default(true),
-        rules: z.array(ruleSchema).min(1).describe("One or more access rules."),
-        confirm: z.boolean().optional().describe("Set true to create the policy."),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false },
+  registerDelete(server, deps, {
+    name: "delete_policy",
+    title: "Delete policy",
+    description:
+      "DESTRUCTIVE: delete an access policy. This can immediately change what peers can " +
+      "reach each other. Requires the exact policy_id and confirm=true.",
+    inputSchema: {
+      policy_id: z.string().describe("The exact policy ID to delete."),
+      confirm: z.boolean().describe("Must be true to delete."),
     },
-    async ({ name, description, enabled, rules, confirm }) =>
-      guard(async () => {
-        const body = { name, description, enabled, rules };
-        if (!confirm) return preview("Would create an access policy.", body);
-        return ok(await client.post("/api/policies", body));
-      }),
-  );
-
-  server.registerTool(
-    "update_policy",
-    {
-      title: "Update policy",
-      description:
-        "Update an access policy. Draft-and-confirm: preview shows the change; apply with confirm=true.",
-      inputSchema: {
-        policy_id: z.string().describe("The policy ID."),
-        name: z.string().optional(),
-        description: z.string().optional(),
-        enabled: z.boolean().optional(),
-        rules: z.array(ruleSchema).optional().describe("Full replacement rule set."),
-        confirm: z.boolean().optional().describe("Set true to apply the change."),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false },
-    },
-    async ({ policy_id, confirm, ...fields }) =>
-      guard(async () => {
-        const body = Object.fromEntries(
-          Object.entries(fields).filter(([, v]) => v !== undefined),
-        );
-        if (!confirm) return preview(`Would update policy ${policy_id}.`, body);
-        return ok(await client.put(`/api/policies/${encodeURIComponent(policy_id)}`, body));
-      }),
-  );
-
-  if (config.enableDestructive) {
-    server.registerTool(
-      "delete_policy",
-      {
-        title: "Delete policy",
-        description:
-          "DESTRUCTIVE: delete an access policy. This can immediately change what peers can " +
-          "reach each other. Requires the exact policy_id and confirm=true.",
-        inputSchema: {
-          policy_id: z.string().describe("The exact policy ID to delete."),
-          confirm: z.boolean().describe("Must be true to delete."),
-        },
-        annotations: { readOnlyHint: false, destructiveHint: true },
-      },
-      async ({ policy_id, confirm }) =>
-        guard(async () => {
-          if (!confirm) return preview(`Would DELETE policy ${policy_id}.`, { policy_id });
-          await client.delete(`/api/policies/${encodeURIComponent(policy_id)}`);
-          return ok({ status: "deleted", policy_id });
-        }),
-    );
-  }
+    path: ({ policy_id }) => `/api/policies/${encodeURIComponent(policy_id)}`,
+    label: "policy",
+    idField: "policy_id",
+  });
 }
