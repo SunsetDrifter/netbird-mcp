@@ -11,14 +11,25 @@ import type {
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { normalizeBaseUrl } from "../config.js";
 import type { Logger } from "../logger.js";
+import { NetBirdClient } from "../netbird/client.js";
+import { RateLimiter } from "../netbird/rateLimiter.js";
 import { ACCESS_TTL_SECONDS, OAuthStore } from "./store.js";
 import { renderLoginPage } from "./loginPage.js";
+
+// Defaults for the short-lived client built solely to verify a PAT at login
+// time (mirrors the ServerConfig defaults in config.ts).
+const DEFAULT_VERIFY_TIMEOUT_MS = 30_000;
+const DEFAULT_VERIFY_MAX_REQUESTS_PER_MINUTE = 110;
 
 export interface ProviderOptions {
   logger: Logger;
   /** Verify a NetBird PAT during login by making a cheap read call. */
   verifyPatOnLogin?: boolean;
   fetchImpl?: typeof fetch;
+  /** Timeout for the login-time PAT verification call, in ms. */
+  verifyTimeoutMs?: number;
+  /** Client-side rate-limit cap applied to the login-time verification call. */
+  verifyMaxRequestsPerMinute?: number;
 }
 
 /**
@@ -36,11 +47,16 @@ export class NetBirdOAuthProvider implements OAuthServerProvider {
   private readonly logger: Logger;
   private readonly verifyPat: boolean;
   private readonly fetchImpl: typeof fetch;
+  private readonly verifyTimeoutMs: number;
+  private readonly verifyMaxRequestsPerMinute: number;
 
   constructor(opts: ProviderOptions) {
     this.logger = opts.logger;
     this.verifyPat = opts.verifyPatOnLogin ?? true;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.verifyTimeoutMs = opts.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS;
+    this.verifyMaxRequestsPerMinute =
+      opts.verifyMaxRequestsPerMinute ?? DEFAULT_VERIFY_MAX_REQUESTS_PER_MINUTE;
   }
 
   get clientsStore(): OAuthRegisteredClientsStore {
@@ -219,16 +235,19 @@ export class NetBirdOAuthProvider implements OAuthServerProvider {
     };
   }
 
-  private async checkPat(pat: string, baseUrl: string): Promise<"ok" | "invalid" | "unknown"> {
-    try {
-      const res = await this.fetchImpl(`${baseUrl}/api/users`, {
-        headers: { Authorization: `Token ${pat}`, Accept: "application/json" },
-      });
-      if (res.status === 401 || res.status === 403) return "invalid";
-      return "ok";
-    } catch {
-      // Network/DNS issue — don't block login; the first tool call will surface it.
-      return "unknown";
-    }
+  /**
+   * Delegates PAT verification to a short-lived NetBird client so the auth
+   * header convention, timeout, retry, and rate limiting have exactly one
+   * implementation — the same one every tool call uses.
+   */
+  private checkPat(pat: string, baseUrl: string): Promise<"ok" | "invalid" | "unknown"> {
+    const client = new NetBirdClient({
+      auth: { token: pat, baseUrl },
+      logger: this.logger,
+      rateLimiter: new RateLimiter(this.verifyMaxRequestsPerMinute),
+      timeoutMs: this.verifyTimeoutMs,
+      fetchImpl: this.fetchImpl,
+    });
+    return client.verifyToken();
   }
 }

@@ -1,11 +1,11 @@
-import { describe, it, expect } from "vitest";
-import { NetBirdOAuthProvider } from "../src/oauth/provider.js";
+import { describe, it, expect, vi } from "vitest";
+import { NetBirdOAuthProvider, type ProviderOptions } from "../src/oauth/provider.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
 
 const silentLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
-function newProvider() {
-  return new NetBirdOAuthProvider({ logger: silentLogger, verifyPatOnLogin: false });
+function newProvider(opts: Partial<ProviderOptions> = {}) {
+  return new NetBirdOAuthProvider({ logger: silentLogger, verifyPatOnLogin: false, ...opts });
 }
 
 async function registerClient(p: NetBirdOAuthProvider): Promise<OAuthClientInformationFull> {
@@ -15,6 +15,36 @@ async function registerClient(p: NetBirdOAuthProvider): Promise<OAuthClientInfor
   } as OAuthClientInformationFull;
   await p.clientsStore.registerClient!(client);
   return client;
+}
+
+function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    ...init,
+  });
+}
+
+/** Minimal stand-in for the Express req/res the login handler expects. */
+function fakeLoginReqRes(body: Record<string, string>) {
+  const req = { body } as unknown as import("express").Request;
+  const state = { status: 200, redirected: undefined as string | undefined, sent: undefined as string | undefined };
+  const res = {
+    status(code: number) {
+      state.status = code;
+      return this;
+    },
+    setHeader() {
+      return this;
+    },
+    send(body: string) {
+      state.sent = body;
+    },
+    redirect(_code: number, url: string) {
+      state.redirected = url;
+    },
+  } as unknown as import("express").Response;
+  return { req, res, state };
 }
 
 describe("NetBirdOAuthProvider", () => {
@@ -94,5 +124,53 @@ describe("NetBirdOAuthProvider", () => {
   it("rejects unknown access tokens", async () => {
     const p = newProvider();
     await expect(p.verifyAccessToken("nope")).rejects.toThrow(/invalid_token/);
+  });
+
+  it("honours the client-derived PAT verification outcome during login", async () => {
+    // Invalid PAT (401 from the users endpoint, through the client) blocks login.
+    const rejectingFetch = vi.fn(async (url, init) => {
+      expect(String(url)).toBe("https://api.netbird.io/api/users");
+      expect((init?.headers as Record<string, string>).Authorization).toBe("Token bad-pat");
+      return jsonResponse({}, { status: 401 });
+    }) as unknown as typeof fetch;
+
+    const pInvalid = newProvider({ verifyPatOnLogin: true, fetchImpl: rejectingFetch });
+    const invalidClient = await registerClient(pInvalid);
+    const { req, res, state } = fakeLoginReqRes({
+      client_id: invalidClient.client_id,
+      redirect_uri: invalidClient.redirect_uris[0],
+      state: "s1",
+      code_challenge: "c1",
+      scope: "netbird",
+      netbird_token: "bad-pat",
+      netbird_api_url: "https://api.netbird.io",
+    });
+
+    await pInvalid.handleLogin(req, res);
+
+    expect(rejectingFetch).toHaveBeenCalledOnce();
+    expect(state.redirected).toBeUndefined();
+    expect(state.status).toBe(400);
+    expect(state.sent).toMatch(/rejected/i);
+
+    // Valid PAT (200 from the users endpoint) lets login proceed to the redirect.
+    const acceptingFetch = vi.fn(async () => jsonResponse([{ id: "u1" }])) as unknown as typeof fetch;
+
+    const pValid = newProvider({ verifyPatOnLogin: true, fetchImpl: acceptingFetch });
+    const validClient = await registerClient(pValid);
+    const { req: req2, res: res2, state: state2 } = fakeLoginReqRes({
+      client_id: validClient.client_id,
+      redirect_uri: validClient.redirect_uris[0],
+      state: "s2",
+      code_challenge: "c2",
+      scope: "netbird",
+      netbird_token: "good-pat",
+      netbird_api_url: "https://api.netbird.io",
+    });
+
+    await pValid.handleLogin(req2, res2);
+
+    expect(acceptingFetch).toHaveBeenCalledOnce();
+    expect(state2.redirected).toContain("code=");
   });
 });

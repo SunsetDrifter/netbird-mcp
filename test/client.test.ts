@@ -90,3 +90,67 @@ describe("NetBirdClient", () => {
     expect(group).toEqual({ id: "g1", name: "eng" });
   });
 });
+
+describe("NetBirdClient#verifyToken", () => {
+  it("hits /api/users with the Token auth header and returns ok on success", async () => {
+    const fetchImpl = vi.fn(async (url, init) => {
+      expect(String(url)).toBe("https://api.netbird.io/api/users");
+      expect((init?.headers as Record<string, string>).Authorization).toBe("Token test-pat");
+      return jsonResponse([{ id: "u1" }]);
+    }) as unknown as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    expect(await client.verifyToken()).toBe("ok");
+  });
+
+  it("returns invalid on 401", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ message: "unauthorized" }, { status: 401 }),
+    ) as unknown as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    expect(await client.verifyToken()).toBe("invalid");
+  });
+
+  it("returns invalid on 403", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ message: "forbidden" }, { status: 403 }),
+    ) as unknown as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    expect(await client.verifyToken()).toBe("invalid");
+  });
+
+  it("retries on 429 then returns ok", async () => {
+    let calls = 0;
+    const fetchImpl = vi.fn(async () => {
+      calls++;
+      if (calls === 1) {
+        return new Response("", { status: 429, headers: { "retry-after": "0" } });
+      }
+      return jsonResponse([{ id: "u1" }]);
+    }) as unknown as typeof fetch;
+
+    const client = makeClient(fetchImpl);
+    expect(await client.verifyToken()).toBe("ok");
+    expect(calls).toBe(2);
+  });
+
+  it("returns unknown on a network error", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("fetch failed");
+    }) as unknown as typeof fetch;
+
+    const client = makeClient(fetchImpl, 0);
+    expect(await client.verifyToken()).toBe("unknown");
+  });
+
+  it("returns unknown on 500", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ message: "boom" }, { status: 500 }),
+    ) as unknown as typeof fetch;
+
+    const client = makeClient(fetchImpl, 0);
+    expect(await client.verifyToken()).toBe("unknown");
+  });
+});
