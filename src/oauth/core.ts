@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { normalizeBaseUrl } from "../config.js";
 import type { Logger } from "../logger.js";
 import { AuthContext, AuthError } from "../auth/context.js";
@@ -214,7 +215,7 @@ export class OAuthCore {
 
   challengeForCode(code: string): string {
     const challenge = this.store.challengeForCode(code);
-    if (!challenge) throw new Error("invalid_grant: unknown or expired authorization code");
+    if (!challenge) throw new InvalidGrantError("unknown or expired authorization code");
     return challenge;
   }
 
@@ -225,10 +226,10 @@ export class OAuthCore {
     redirectUri?: string,
   ): OAuthTokens {
     const rec = this.store.takeCode(authorizationCode);
-    if (!rec) throw new Error("invalid_grant: unknown or expired authorization code");
-    if (rec.clientId !== clientId) throw new Error("invalid_grant: client mismatch");
+    if (!rec) throw new InvalidGrantError("unknown or expired authorization code");
+    if (rec.clientId !== clientId) throw new InvalidGrantError("client mismatch");
     if (redirectUri && redirectUri !== rec.redirectUri) {
-      throw new Error("invalid_grant: redirect_uri mismatch");
+      throw new InvalidGrantError("redirect_uri mismatch");
     }
     // Re-verify PKCE ourselves after consuming the code. The SDK's token handler
     // already checked this via challengeForCode, but recomputing the S256
@@ -236,7 +237,7 @@ export class OAuthCore {
     // lookup — means a future SDK reordering its internal calls can never let a
     // code be exchanged without a matching verifier.
     if (!pkceMatches(codeVerifier, rec.codeChallenge)) {
-      throw new Error("invalid_grant: PKCE verification failed");
+      throw new InvalidGrantError("PKCE verification failed");
     }
 
     const { accessToken, refreshToken } = this.store.issueTokens(
@@ -250,7 +251,7 @@ export class OAuthCore {
   exchangeRefreshToken(clientId: string, refreshToken: string, scopes?: string[]): OAuthTokens {
     const rec = this.store.getRefresh(refreshToken);
     if (!rec || rec.clientId !== clientId) {
-      throw new Error("invalid_grant: unknown refresh token");
+      throw new InvalidGrantError("unknown refresh token");
     }
     const grantedScopes = scopes && scopes.length ? scopes : rec.scopes;
     const { accessToken, refreshToken: newRefresh } = this.store.issueTokens(
@@ -264,7 +265,7 @@ export class OAuthCore {
 
   verifyAccessToken(token: string): AuthInfo {
     const rec = this.store.getAccess(token);
-    if (!rec) throw new Error("invalid_token");
+    if (!rec) throw new InvalidTokenError("unknown or expired access token");
     return {
       token,
       clientId: rec.clientId,

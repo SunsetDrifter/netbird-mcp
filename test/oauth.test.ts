@@ -1,14 +1,14 @@
-import { createHash } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import { NetBirdOAuthProvider, type ProviderOptions } from "../src/oauth/provider.js";
 import { DEFAULT_MAX_REQUESTS_PER_MINUTE, DEFAULT_REQUEST_TIMEOUT_MS } from "../src/config.js";
+import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
-
-const silentLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+import { silentLogger, pkcePair } from "./helpers.js";
 
 // A real PKCE pair: the exchange re-verifies S256(verifier) === stored challenge.
-const VERIFIER = "oauth-test-code-verifier-abcdefghijklmnopqrstuvwxyz0123456789";
-const CHALLENGE = createHash("sha256").update(VERIFIER).digest("base64url");
+const { verifier: VERIFIER, challenge: CHALLENGE } = pkcePair(
+  "oauth-test-code-verifier-abcdefghijklmnopqrstuvwxyz0123456789",
+);
 
 function newProvider(opts: Partial<ProviderOptions> = {}) {
   return new NetBirdOAuthProvider({
@@ -121,7 +121,7 @@ describe("NetBirdOAuthProvider", () => {
     await p.exchangeAuthorizationCode(client, code, VERIFIER, client.redirect_uris[0]);
     await expect(
       p.exchangeAuthorizationCode(client, code, VERIFIER, client.redirect_uris[0]),
-    ).rejects.toThrow(/invalid_grant/);
+    ).rejects.toThrow(InvalidGrantError);
   });
 
   it("refresh_token grant rotates and preserves the NetBird binding", async () => {
@@ -140,13 +140,13 @@ describe("NetBirdOAuthProvider", () => {
 
     // Old refresh token is rotated out.
     await expect(p.exchangeRefreshToken(client, first.refresh_token!)).rejects.toThrow(
-      /invalid_grant/,
+      InvalidGrantError,
     );
   });
 
   it("rejects unknown access tokens", async () => {
     const p = newProvider();
-    await expect(p.verifyAccessToken("nope")).rejects.toThrow(/invalid_token/);
+    await expect(p.verifyAccessToken("nope")).rejects.toThrow(InvalidTokenError);
   });
 
   it("honours the client-derived PAT verification outcome during login", async () => {

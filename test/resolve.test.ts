@@ -1,16 +1,15 @@
-import { createHash } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import { resolveAuth } from "../src/auth/resolve.js";
 import { NetBirdOAuthProvider } from "../src/oauth/provider.js";
 import { DEFAULT_MAX_REQUESTS_PER_MINUTE, DEFAULT_REQUEST_TIMEOUT_MS } from "../src/config.js";
 import { AuthError } from "../src/auth/context.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
-
-const silentLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+import { silentLogger, pkcePair, HEADER_NAMES } from "./helpers.js";
 
 // A real PKCE pair: the code exchange re-verifies S256(verifier) === challenge.
-const VERIFIER = "resolve-test-code-verifier-abcdefghijklmnopqrstuvwxyz0123456789";
-const CHALLENGE = createHash("sha256").update(VERIFIER).digest("base64url");
+const { verifier: VERIFIER, challenge: CHALLENGE } = pkcePair(
+  "resolve-test-code-verifier-abcdefghijklmnopqrstuvwxyz0123456789",
+);
 
 function newProvider(): NetBirdOAuthProvider {
   return new NetBirdOAuthProvider({
@@ -22,8 +21,8 @@ function newProvider(): NetBirdOAuthProvider {
 }
 
 // Header names are required by authFromRequest now; the entrypoint threads the
-// config defaults through, so tests spell them out explicitly.
-const headerNames = { tokenHeader: "x-netbird-token", urlHeader: "x-netbird-api-url" };
+// config defaults through, so tests do the same.
+const headerNames = HEADER_NAMES;
 
 /**
  * Drive the provider's real public flow to mint a genuine access token. The

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { authFromEnv } from "../src/auth/fromEnv.js";
 import { authFromRequest } from "../src/auth/fromRequest.js";
 import { AuthError } from "../src/auth/context.js";
+import { HEADER_NAMES } from "./helpers.js";
 
 describe("authFromEnv (local)", () => {
   it("resolves token and default base URL", () => {
@@ -24,7 +25,7 @@ describe("authFromEnv (local)", () => {
 
 describe("authFromRequest (cloud)", () => {
   // Header names are required parameters now — config.ts is their only default source.
-  const headers = { tokenHeader: "x-netbird-token", urlHeader: "x-netbird-api-url" };
+  const headers = HEADER_NAMES;
 
   it("reads the dedicated token header", () => {
     const auth = authFromRequest({ "x-netbird-token": "pat" }, headers);

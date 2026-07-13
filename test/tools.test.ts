@@ -4,7 +4,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { buildServer } from "../src/server.js";
-import { registerMutation, registerDelete, type ToolDeps } from "../src/tools/registry.js";
+import {
+  registerMutation,
+  registerDelete,
+  type ToolDeps,
+  type MutationManifest,
+  type DeleteManifest,
+} from "../src/tools/registry.js";
 import type { ServerConfig } from "../src/config.js";
 import type { Logger } from "../src/logger.js";
 
@@ -359,12 +365,15 @@ describe("confirm collision guard (registration-time throw)", () => {
 
   it("rejects a mutation manifest that declares its own confirm field", () => {
     const server = new McpServer({ name: "t", version: "0.0.0" });
+    // The cast smuggles the colliding field past the compile-time guard so the
+    // runtime guard (the last line of defence for untyped callers) is exercised.
+    const colliding = { confirm: z.boolean().optional() } as unknown as Record<string, never>;
     expect(() =>
       registerMutation(server, deps, {
         name: "bad_mutation",
         title: "Bad",
         description: "Bad",
-        inputSchema: { confirm: z.boolean().optional() },
+        inputSchema: colliding,
         method: "POST",
         path: () => "/api/x",
         previewAction: () => "Would x.",
@@ -375,16 +384,29 @@ describe("confirm collision guard (registration-time throw)", () => {
 
   it("rejects a delete manifest that declares its own confirm field", () => {
     const server = new McpServer({ name: "t", version: "0.0.0" });
+    const colliding = { x_id: z.string(), confirm: z.boolean() } as unknown as {
+      x_id: z.ZodString;
+    };
     expect(() =>
       registerDelete(server, deps, {
         name: "bad_delete",
         title: "Bad",
         description: "Bad",
-        inputSchema: { x_id: z.string(), confirm: z.boolean() },
+        inputSchema: colliding,
         path: ({ x_id }) => `/api/x/${x_id}`,
         label: "x",
         idField: "x_id",
       }),
     ).toThrow(/confirm/);
+  });
+
+  it("rejects a confirm-declaring manifest at the type level", () => {
+    const shape = { confirm: z.boolean().optional() };
+    // @ts-expect-error — `confirm` is reserved by the registry guardrail
+    type RejectedMutation = MutationManifest<typeof shape>;
+    // @ts-expect-error — `confirm` is reserved by the registry guardrail
+    type RejectedDelete = DeleteManifest<typeof shape>;
+    // Type-only assertions; the runtime guard is exercised above.
+    expect(shape.confirm).toBeDefined();
   });
 });

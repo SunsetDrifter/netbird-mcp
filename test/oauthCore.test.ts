@@ -1,11 +1,10 @@
-import { createHash } from "node:crypto";
 import { describe, it, expect, vi } from "vitest";
 import { OAuthCore, type OAuthCoreOptions } from "../src/oauth/core.js";
 import { DEFAULT_MAX_REQUESTS_PER_MINUTE, DEFAULT_REQUEST_TIMEOUT_MS } from "../src/config.js";
 import { renderLoginPage, type LoginPageParams } from "../src/oauth/loginPage.js";
+import { InvalidGrantError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
-
-const silentLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+import { silentLogger, pkcePair } from "./helpers.js";
 
 function newCore(opts: Partial<OAuthCoreOptions> = {}): OAuthCore {
   return new OAuthCore({
@@ -28,15 +27,6 @@ function registerClient(
   } as OAuthClientInformationFull;
   core.registerClient(client);
   return client;
-}
-
-/** A real PKCE verifier/challenge pair: challenge = base64url(sha256(verifier)). */
-function pkcePair(verifier = "test-code-verifier-abcdefghijklmnopqrstuvwxyz012345"): {
-  verifier: string;
-  challenge: string;
-} {
-  const challenge = createHash("sha256").update(verifier).digest("base64url");
-  return { verifier, challenge };
 }
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
@@ -266,7 +256,7 @@ describe("OAuthCore.exchangeAuthorizationCode — PKCE re-verification (defence 
         "the-wrong-verifier",
         client.redirect_uris[0],
       ),
-    ).toThrow(/invalid_grant/);
+    ).toThrow(InvalidGrantError);
   });
 
   it("rejects a missing code verifier with invalid_grant", async () => {
@@ -277,7 +267,7 @@ describe("OAuthCore.exchangeAuthorizationCode — PKCE re-verification (defence 
 
     expect(() =>
       core.exchangeAuthorizationCode(client.client_id, code, undefined, client.redirect_uris[0]),
-    ).toThrow(/invalid_grant/);
+    ).toThrow(InvalidGrantError);
   });
 
   it("fails a wrong verifier even when challengeForCode was never called first", async () => {
@@ -295,7 +285,7 @@ describe("OAuthCore.exchangeAuthorizationCode — PKCE re-verification (defence 
         "the-wrong-verifier",
         client.redirect_uris[0],
       ),
-    ).toThrow(/invalid_grant/);
+    ).toThrow(InvalidGrantError);
   });
 
   it("accepts the correct verifier end-to-end through the real login flow", async () => {

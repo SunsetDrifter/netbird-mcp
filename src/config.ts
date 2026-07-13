@@ -9,6 +9,10 @@ export const DEFAULT_NETBIRD_API_URL = "https://api.netbird.io";
 export const DEFAULT_MAX_REQUESTS_PER_MINUTE = 110;
 /** Per-request timeout for NetBird calls, in ms. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+/** Default header carrying a direct NetBird PAT (fallback auth path). */
+export const DEFAULT_TOKEN_HEADER = "x-netbird-token";
+/** Default header carrying a self-hosted management API base URL. */
+export const DEFAULT_URL_HEADER = "x-netbird-api-url";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -68,8 +72,8 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     logLevel,
     http: {
       port,
-      tokenHeader: env.NETBIRD_TOKEN_HEADER ?? "x-netbird-token",
-      urlHeader: env.NETBIRD_URL_HEADER ?? "x-netbird-api-url",
+      tokenHeader: env.NETBIRD_TOKEN_HEADER ?? DEFAULT_TOKEN_HEADER,
+      urlHeader: env.NETBIRD_URL_HEADER ?? DEFAULT_URL_HEADER,
       oauthEnabled: boolEnv(env.NETBIRD_ENABLE_OAUTH, true),
       publicBaseUrl,
       verifyPatOnLogin: boolEnv(env.NETBIRD_VERIFY_PAT_ON_LOGIN, true),
