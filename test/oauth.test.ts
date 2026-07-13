@@ -149,6 +149,22 @@ describe("NetBirdOAuthProvider", () => {
     await expect(p.verifyAccessToken("nope")).rejects.toThrow(InvalidTokenError);
   });
 
+  it("tells the SDK to delegate PKCE so the code_verifier reaches the core", async () => {
+    const p = newProvider();
+    // The SDK's token handler passes code_verifier to exchangeAuthorizationCode
+    // ONLY when this flag is set; the core's PKCE check is mandatory, so
+    // without the flag every legitimate wire exchange would fail invalid_grant.
+    expect(p.skipLocalPkceValidation).toBe(true);
+
+    // The wire shape under the flag: verifier forwarded -> exchange succeeds;
+    // verifier withheld (the pre-flag SDK behaviour) -> loud invalid_grant.
+    const client = await registerClient(p);
+    const code = await mintCode(p, client, { netbirdToken: "pat", baseUrl: "https://api.netbird.io" });
+    await expect(
+      p.exchangeAuthorizationCode(client, code, undefined, client.redirect_uris[0]),
+    ).rejects.toThrow(InvalidGrantError);
+  });
+
   it("honours the client-derived PAT verification outcome during login", async () => {
     // Invalid PAT (401 from the users endpoint, through the client) blocks login.
     const rejectingFetch = vi.fn(async (url, init) => {
