@@ -29,22 +29,10 @@ import { NetBirdOAuthProvider } from "../oauth/provider.js";
  */
 const config = loadServerConfig();
 const logger = createLogger(config.logLevel);
-const port = Number(process.env.PORT ?? 3000);
-const tokenHeader = process.env.NETBIRD_TOKEN_HEADER ?? "x-netbird-token";
-const urlHeader = process.env.NETBIRD_URL_HEADER ?? "x-netbird-api-url";
-const oauthEnabled = (process.env.NETBIRD_ENABLE_OAUTH ?? "true").toLowerCase() !== "false";
+const { port, tokenHeader, urlHeader, oauthEnabled, publicBaseUrl, verifyPatOnLogin } =
+  config.http;
 
-// Public origin the AS advertises in its metadata. Must be the externally reachable
-// URL. Defaults to localhost for local testing (localhost is exempt from the HTTPS rule).
-const publicBaseUrl = (process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}`).replace(
-  /\/+$/,
-  "",
-);
-
-const provider = new NetBirdOAuthProvider({
-  logger,
-  verifyPatOnLogin: (process.env.NETBIRD_VERIFY_PAT_ON_LOGIN ?? "true").toLowerCase() !== "false",
-});
+const provider = new NetBirdOAuthProvider({ logger, verifyPatOnLogin });
 
 // One rate limiter per tenant (keyed by a hash of the NetBird token, never the token
 // itself), so NetBird's per-account limit is respected without cross-tenant interference.

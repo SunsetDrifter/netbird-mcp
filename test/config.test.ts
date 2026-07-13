@@ -1,0 +1,180 @@
+import { describe, it, expect } from "vitest";
+import { loadServerConfig, normalizeBaseUrl } from "../src/config.js";
+
+describe("loadServerConfig — core fields", () => {
+  it("resolves documented defaults when nothing is set", () => {
+    const config = loadServerConfig({} as NodeJS.ProcessEnv);
+    expect(config.enableDestructive).toBe(false);
+    expect(config.maxRequestsPerMinute).toBe(110);
+    expect(config.requestTimeoutMs).toBe(30_000);
+    expect(config.logLevel).toBe("info");
+  });
+
+  it("honors explicit values", () => {
+    const config = loadServerConfig({
+      NETBIRD_ENABLE_DESTRUCTIVE: "true",
+      NETBIRD_MAX_RPM: "42",
+      NETBIRD_TIMEOUT_MS: "5000",
+      LOG_LEVEL: "debug",
+    } as NodeJS.ProcessEnv);
+    expect(config.enableDestructive).toBe(true);
+    expect(config.maxRequestsPerMinute).toBe(42);
+    expect(config.requestTimeoutMs).toBe(5000);
+    expect(config.logLevel).toBe("debug");
+  });
+
+  it("parses the boolean convention's affirmative tokens case-insensitively", () => {
+    for (const value of ["1", "TRUE", "Yes", "ON"]) {
+      const config = loadServerConfig({ NETBIRD_ENABLE_DESTRUCTIVE: value } as NodeJS.ProcessEnv);
+      expect(config.enableDestructive).toBe(true);
+    }
+  });
+
+  it("falls back to info for an unrecognized log level", () => {
+    const config = loadServerConfig({ LOG_LEVEL: "verbose" } as NodeJS.ProcessEnv);
+    expect(config.logLevel).toBe("info");
+  });
+
+  it("falls back to the default for a non-positive or malformed numeric value", () => {
+    const config = loadServerConfig({
+      NETBIRD_MAX_RPM: "not-a-number",
+      NETBIRD_TIMEOUT_MS: "-5",
+    } as NodeJS.ProcessEnv);
+    expect(config.maxRequestsPerMinute).toBe(110);
+    expect(config.requestTimeoutMs).toBe(30_000);
+  });
+});
+
+describe("loadServerConfig — http sub-object defaults", () => {
+  it("resolves documented defaults when nothing is set", () => {
+    const config = loadServerConfig({} as NodeJS.ProcessEnv);
+    expect(config.http).toEqual({
+      port: 3000,
+      tokenHeader: "x-netbird-token",
+      urlHeader: "x-netbird-api-url",
+      oauthEnabled: true,
+      publicBaseUrl: "http://localhost:3000",
+      verifyPatOnLogin: true,
+    });
+  });
+
+  it("derives the default public base URL from a custom port", () => {
+    const config = loadServerConfig({ PORT: "8080" } as NodeJS.ProcessEnv);
+    expect(config.http.port).toBe(8080);
+    expect(config.http.publicBaseUrl).toBe("http://localhost:8080");
+  });
+});
+
+describe("loadServerConfig — http sub-object explicit values", () => {
+  it("honors every explicit http value", () => {
+    const config = loadServerConfig({
+      PORT: "4000",
+      NETBIRD_TOKEN_HEADER: "x-custom-token",
+      NETBIRD_URL_HEADER: "x-custom-url",
+      NETBIRD_ENABLE_OAUTH: "false",
+      PUBLIC_BASE_URL: "https://mcp.example.com/",
+      NETBIRD_VERIFY_PAT_ON_LOGIN: "false",
+    } as NodeJS.ProcessEnv);
+    expect(config.http).toEqual({
+      port: 4000,
+      tokenHeader: "x-custom-token",
+      urlHeader: "x-custom-url",
+      oauthEnabled: false,
+      publicBaseUrl: "https://mcp.example.com",
+      verifyPatOnLogin: false,
+    });
+  });
+
+  it("parses PORT as a number", () => {
+    const config = loadServerConfig({ PORT: "9090" } as NodeJS.ProcessEnv);
+    expect(config.http.port).toBe(9090);
+  });
+
+  it("strips a trailing slash from an explicit PUBLIC_BASE_URL", () => {
+    const config = loadServerConfig({
+      PUBLIC_BASE_URL: "https://mcp.example.com///",
+    } as NodeJS.ProcessEnv);
+    expect(config.http.publicBaseUrl).toBe("https://mcp.example.com");
+  });
+});
+
+describe("loadServerConfig — http boolean flags (false/FALSE/unset)", () => {
+  it("NETBIRD_ENABLE_OAUTH: unset defaults to enabled", () => {
+    expect(loadServerConfig({} as NodeJS.ProcessEnv).http.oauthEnabled).toBe(true);
+  });
+
+  it("NETBIRD_ENABLE_OAUTH: 'false' disables", () => {
+    expect(
+      loadServerConfig({ NETBIRD_ENABLE_OAUTH: "false" } as NodeJS.ProcessEnv).http.oauthEnabled,
+    ).toBe(false);
+  });
+
+  it("NETBIRD_ENABLE_OAUTH: 'FALSE' disables (case-insensitive)", () => {
+    expect(
+      loadServerConfig({ NETBIRD_ENABLE_OAUTH: "FALSE" } as NodeJS.ProcessEnv).http.oauthEnabled,
+    ).toBe(false);
+  });
+
+  it("NETBIRD_ENABLE_OAUTH: 'true' keeps it enabled", () => {
+    expect(
+      loadServerConfig({ NETBIRD_ENABLE_OAUTH: "true" } as NodeJS.ProcessEnv).http.oauthEnabled,
+    ).toBe(true);
+  });
+
+  it("NETBIRD_VERIFY_PAT_ON_LOGIN: unset defaults to enabled", () => {
+    expect(
+      loadServerConfig({} as NodeJS.ProcessEnv).http.verifyPatOnLogin,
+    ).toBe(true);
+  });
+
+  it("NETBIRD_VERIFY_PAT_ON_LOGIN: 'false' disables", () => {
+    expect(
+      loadServerConfig({ NETBIRD_VERIFY_PAT_ON_LOGIN: "false" } as NodeJS.ProcessEnv).http
+        .verifyPatOnLogin,
+    ).toBe(false);
+  });
+
+  it("NETBIRD_VERIFY_PAT_ON_LOGIN: 'FALSE' disables (case-insensitive)", () => {
+    expect(
+      loadServerConfig({ NETBIRD_VERIFY_PAT_ON_LOGIN: "FALSE" } as NodeJS.ProcessEnv).http
+        .verifyPatOnLogin,
+    ).toBe(false);
+  });
+});
+
+describe("loadServerConfig — http header names", () => {
+  it("uses the dedicated defaults when unset", () => {
+    const config = loadServerConfig({} as NodeJS.ProcessEnv);
+    expect(config.http.tokenHeader).toBe("x-netbird-token");
+    expect(config.http.urlHeader).toBe("x-netbird-api-url");
+  });
+
+  it("round-trips custom header names", () => {
+    const config = loadServerConfig({
+      NETBIRD_TOKEN_HEADER: "authorization-token",
+      NETBIRD_URL_HEADER: "x-nb-url",
+    } as NodeJS.ProcessEnv);
+    expect(config.http.tokenHeader).toBe("authorization-token");
+    expect(config.http.urlHeader).toBe("x-nb-url");
+  });
+});
+
+describe("normalizeBaseUrl", () => {
+  it("defaults to the NetBird cloud API URL when unset", () => {
+    expect(normalizeBaseUrl(undefined)).toBe("https://api.netbird.io");
+  });
+
+  it("defaults when given an empty or whitespace-only string", () => {
+    expect(normalizeBaseUrl("")).toBe("https://api.netbird.io");
+    expect(normalizeBaseUrl("   ")).toBe("https://api.netbird.io");
+  });
+
+  it("strips one or more trailing slashes from a custom URL", () => {
+    expect(normalizeBaseUrl("https://nb.example.com/")).toBe("https://nb.example.com");
+    expect(normalizeBaseUrl("https://nb.example.com///")).toBe("https://nb.example.com");
+  });
+
+  it("leaves a URL without a trailing slash unchanged", () => {
+    expect(normalizeBaseUrl("https://nb.example.com")).toBe("https://nb.example.com");
+  });
+});
