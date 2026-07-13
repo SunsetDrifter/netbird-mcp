@@ -26,7 +26,7 @@ const BEARER_RE = /^Bearer\s+/i;
  */
 export async function resolveAuth(
   headers: IncomingHttpHeaders,
-  opts: AuthResolutionOptions = {},
+  opts: AuthResolutionOptions,
 ): Promise<AuthContext> {
   const authz = headerValue(headers, "authorization");
   const bearerAttempted = authz !== undefined && BEARER_RE.test(authz);

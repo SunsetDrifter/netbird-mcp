@@ -10,7 +10,13 @@ const VERIFIER = "oauth-test-code-verifier-abcdefghijklmnopqrstuvwxyz0123456789"
 const CHALLENGE = createHash("sha256").update(VERIFIER).digest("base64url");
 
 function newProvider(opts: Partial<ProviderOptions> = {}) {
-  return new NetBirdOAuthProvider({ logger: silentLogger, verifyPatOnLogin: false, ...opts });
+  return new NetBirdOAuthProvider({
+    logger: silentLogger,
+    verifyPatOnLogin: false,
+    maxRequestsPerMinute: 110,
+    requestTimeoutMs: 30_000,
+    ...opts,
+  });
 }
 
 async function registerClient(p: NetBirdOAuthProvider): Promise<OAuthClientInformationFull> {

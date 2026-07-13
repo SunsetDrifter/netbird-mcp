@@ -7,7 +7,13 @@ import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/share
 const silentLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
 function newCore(opts: Partial<OAuthCoreOptions> = {}): OAuthCore {
-  return new OAuthCore({ logger: silentLogger, verifyPatOnLogin: false, ...opts });
+  return new OAuthCore({
+    logger: silentLogger,
+    verifyPatOnLogin: false,
+    maxRequestsPerMinute: 110,
+    requestTimeoutMs: 30_000,
+    ...opts,
+  });
 }
 
 function registerClient(
@@ -394,6 +400,51 @@ describe("OAuthCore.completeLogin — API URL validation and indeterminate verif
       await vi.runAllTimersAsync();
       const decision = await pending;
       expect(decision.kind).toBe("redirect");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("OAuthCore — configured rate limit governs login-path PAT verification", () => {
+  function loginForm(client: OAuthClientInformationFull, netbirdToken: string) {
+    return {
+      clientId: client.client_id,
+      redirectUri: client.redirect_uris[0],
+      codeChallenge: "c1",
+      state: "s1",
+      netbirdToken,
+      netbirdApiUrl: "https://api.netbird.io",
+    };
+  }
+
+  it("shares a maxRequestsPerMinute=1 limiter across logins, delaying the second verification", async () => {
+    const acceptingFetch = vi.fn(async () => jsonResponse([{ id: "u1" }])) as unknown as typeof fetch;
+    const core = newCore({
+      verifyPatOnLogin: true,
+      maxRequestsPerMinute: 1,
+      fetchImpl: acceptingFetch,
+    });
+    const client = registerClient(core);
+
+    vi.useFakeTimers();
+    try {
+      // First login consumes the single slot in the shared verify limiter.
+      const first = await core.completeLogin(loginForm(client, "pat-1"));
+      expect(first.kind).toBe("redirect");
+      expect(acceptingFetch).toHaveBeenCalledTimes(1);
+
+      // Second login must wait for the sliding window before its PAT check fires.
+      const pending = core.completeLogin(loginForm(client, "pat-2"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(acceptingFetch).toHaveBeenCalledTimes(1);
+
+      // Advancing past the one-minute window releases the throttled verification.
+      await vi.advanceTimersByTimeAsync(61_000);
+      const second = await pending;
+      expect(second.kind).toBe("redirect");
+      expect(acceptingFetch).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }

@@ -3,10 +3,17 @@ import { normalizeBaseUrl } from "../config.js";
 import { AuthContext, AuthError } from "./context.js";
 
 export interface RequestAuthOptions {
-  /** Header carrying the caller's NetBird PAT. Default: x-netbird-token. */
-  tokenHeader?: string;
-  /** Optional header for a per-tenant API base URL override. */
-  urlHeader?: string;
+  /**
+   * Header carrying the caller's NetBird PAT. Required — the default lives in
+   * config.ts (NETBIRD_TOKEN_HEADER) and is threaded in by the entrypoint, so
+   * this module never carries a fallback of its own.
+   */
+  tokenHeader: string;
+  /**
+   * Header for a per-tenant API base URL override. Required — its default also
+   * lives in config.ts (NETBIRD_URL_HEADER); no fallback is defined here.
+   */
+  urlHeader: string;
 }
 
 export function headerValue(headers: IncomingHttpHeaders, name: string): string | undefined {
@@ -28,10 +35,9 @@ export function headerValue(headers: IncomingHttpHeaders, name: string): string 
  */
 export function authFromRequest(
   headers: IncomingHttpHeaders,
-  opts: RequestAuthOptions = {},
+  opts: RequestAuthOptions,
 ): AuthContext {
-  const tokenHeader = opts.tokenHeader ?? "x-netbird-token";
-  const urlHeader = opts.urlHeader ?? "x-netbird-api-url";
+  const { tokenHeader, urlHeader } = opts;
 
   const authz = headerValue(headers, "authorization")?.trim();
   let token = headerValue(headers, tokenHeader)?.trim();

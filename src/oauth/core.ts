@@ -1,11 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import {
-  normalizeBaseUrl,
-  DEFAULT_MAX_REQUESTS_PER_MINUTE,
-  DEFAULT_REQUEST_TIMEOUT_MS,
-} from "../config.js";
+import { normalizeBaseUrl } from "../config.js";
 import type { Logger } from "../logger.js";
 import { AuthContext, AuthError } from "../auth/context.js";
 import { NetBirdClient, type TokenVerification } from "../netbird/client.js";
@@ -17,6 +13,18 @@ export interface OAuthCoreOptions {
   logger: Logger;
   /** Verify a NetBird PAT during login by making a cheap read call. */
   verifyPatOnLogin?: boolean;
+  /**
+   * Client-side per-minute cap for login-path PAT verification. Required — the
+   * operator's resolved config (NETBIRD_MAX_RPM) is threaded down here so the
+   * same limit governs login verification and tool calls; no default lives here.
+   */
+  maxRequestsPerMinute: number;
+  /**
+   * Per-request timeout (ms) for login-path PAT verification. Required — the
+   * operator's resolved config (NETBIRD_TIMEOUT_MS) is threaded down here; no
+   * default lives here.
+   */
+  requestTimeoutMs: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -69,15 +77,18 @@ export class OAuthCore {
   private readonly store = new OAuthStore();
   private readonly logger: Logger;
   private readonly verifyPat: boolean;
+  private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   // Shared across all logins so a burst of login attempts is throttled as one
   // stream, not one fresh (and therefore never-tripping) limiter per attempt.
-  private readonly verifyLimiter = new RateLimiter(DEFAULT_MAX_REQUESTS_PER_MINUTE);
+  private readonly verifyLimiter: RateLimiter;
 
   constructor(opts: OAuthCoreOptions) {
     this.logger = opts.logger;
     this.verifyPat = opts.verifyPatOnLogin ?? true;
+    this.timeoutMs = opts.requestTimeoutMs;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.verifyLimiter = new RateLimiter(opts.maxRequestsPerMinute);
   }
 
   // --- dynamic client registration (backs the adapter's clientsStore) ---
@@ -307,7 +318,7 @@ export class OAuthCore {
       auth: { token: pat, baseUrl },
       logger: this.logger,
       rateLimiter: this.verifyLimiter,
-      timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+      timeoutMs: this.timeoutMs,
       fetchImpl: this.fetchImpl,
     });
     return client.verifyToken();
