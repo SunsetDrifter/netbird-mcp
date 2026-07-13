@@ -1,0 +1,40 @@
+{
+  "name": "@netbird/mcp",
+  "version": "0.1.0",
+  "description": "MCP server for NetBird — manage peers, setup keys, groups, policies, networks and DNS from Claude. Runs locally (stdio) or in the cloud (streamable HTTP).",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "netbird-mcp": "dist/bin/stdio.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/bin/stdio.js",
+    "start:http": "node dist/bin/http.js",
+    "dev": "tsx src/bin/stdio.ts",
+    "dev:http": "tsx src/bin/http.ts",
+    "inspect": "mcp-inspector tsx src/bin/stdio.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "express": "^4.21.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/inspector": "^0.14.0",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}
