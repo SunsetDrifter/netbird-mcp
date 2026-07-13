@@ -47,6 +47,28 @@ function fakeLoginReqRes(body: Record<string, string>) {
   return { req, res, state };
 }
 
+/**
+ * Mint a one-time authorization code through the provider's real login path
+ * (core.completeLogin via handleLogin) instead of reaching into storage. The
+ * store is private to the OAuth core, so this is the only legitimate seam.
+ */
+async function mintCode(
+  p: NetBirdOAuthProvider,
+  client: OAuthClientInformationFull,
+  binding: { netbirdToken: string; baseUrl: string; codeChallenge?: string; scope?: string },
+): Promise<string> {
+  const { req, res, state } = fakeLoginReqRes({
+    client_id: client.client_id,
+    redirect_uri: client.redirect_uris[0],
+    code_challenge: binding.codeChallenge ?? "challenge",
+    scope: binding.scope ?? "netbird",
+    netbird_token: binding.netbirdToken,
+    netbird_api_url: binding.baseUrl,
+  });
+  await p.handleLogin(req, res);
+  return new URL(state.redirected!).searchParams.get("code")!;
+}
+
 describe("NetBirdOAuthProvider", () => {
   it("registers and retrieves clients", async () => {
     const p = newProvider();
@@ -58,11 +80,7 @@ describe("NetBirdOAuthProvider", () => {
     const p = newProvider();
     const client = await registerClient(p);
 
-    const code = p.store.createCode({
-      clientId: client.client_id,
-      redirectUri: client.redirect_uris[0],
-      codeChallenge: "challenge",
-      scopes: ["netbird"],
+    const code = await mintCode(p, client, {
       netbirdToken: "pat-abc",
       baseUrl: "https://api.netbird.io",
     });
@@ -83,13 +101,11 @@ describe("NetBirdOAuthProvider", () => {
   it("rejects a reused (one-time) authorization code", async () => {
     const p = newProvider();
     const client = await registerClient(p);
-    const code = p.store.createCode({
-      clientId: client.client_id,
-      redirectUri: client.redirect_uris[0],
-      codeChallenge: "c",
-      scopes: [],
+    const code = await mintCode(p, client, {
       netbirdToken: "pat",
       baseUrl: "https://api.netbird.io",
+      codeChallenge: "c",
+      scope: "",
     });
     await p.exchangeAuthorizationCode(client, code, "v", client.redirect_uris[0]);
     await expect(
@@ -100,13 +116,10 @@ describe("NetBirdOAuthProvider", () => {
   it("refresh_token grant rotates and preserves the NetBird binding", async () => {
     const p = newProvider();
     const client = await registerClient(p);
-    const code = p.store.createCode({
-      clientId: client.client_id,
-      redirectUri: client.redirect_uris[0],
-      codeChallenge: "c",
-      scopes: ["netbird"],
+    const code = await mintCode(p, client, {
       netbirdToken: "pat-xyz",
       baseUrl: "https://self.hosted",
+      codeChallenge: "c",
     });
     const first = await p.exchangeAuthorizationCode(client, code, "v", client.redirect_uris[0]);
     const refreshed = await p.exchangeRefreshToken(client, first.refresh_token!);

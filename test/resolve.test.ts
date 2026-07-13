@@ -10,7 +10,12 @@ function newProvider(): NetBirdOAuthProvider {
   return new NetBirdOAuthProvider({ logger: silentLogger, verifyPatOnLogin: false });
 }
 
-/** Drive the provider's real public flow to mint a genuine access token. */
+/**
+ * Drive the provider's real public flow to mint a genuine access token. The
+ * store is private to the OAuth core now, so the code is minted through the
+ * login form handler (the same entry point Claude's flow posts to) instead of
+ * writing to storage directly.
+ */
 async function mintAccessToken(
   provider: NetBirdOAuthProvider,
   binding: { netbirdToken: string; baseUrl: string },
@@ -21,14 +26,33 @@ async function mintAccessToken(
   } as OAuthClientInformationFull;
   await provider.clientsStore.registerClient!(client);
 
-  const code = provider.store.createCode({
-    clientId: client.client_id,
-    redirectUri: client.redirect_uris[0],
-    codeChallenge: "challenge",
-    scopes: ["netbird"],
-    netbirdToken: binding.netbirdToken,
-    baseUrl: binding.baseUrl,
-  });
+  const req = {
+    body: {
+      client_id: client.client_id,
+      redirect_uri: client.redirect_uris[0],
+      code_challenge: "challenge",
+      scope: "netbird",
+      netbird_token: binding.netbirdToken,
+      netbird_api_url: binding.baseUrl,
+    },
+  } as unknown as import("express").Request;
+  let redirected: string | undefined;
+  const res = {
+    status() {
+      return this;
+    },
+    setHeader() {
+      return this;
+    },
+    send() {},
+    redirect(_code: number, url: string) {
+      redirected = url;
+    },
+  } as unknown as import("express").Response;
+
+  await provider.handleLogin(req, res);
+  const code = new URL(redirected!).searchParams.get("code")!;
+
   const tokens = await provider.exchangeAuthorizationCode(
     client,
     code,
