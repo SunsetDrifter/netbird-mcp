@@ -178,3 +178,11 @@ describe("normalizeBaseUrl", () => {
     expect(normalizeBaseUrl("https://nb.example.com")).toBe("https://nb.example.com");
   });
 });
+
+describe("loadServerConfig — malformed numeric input", () => {
+  it("falls back to the default port on a garbage PORT and derives publicBaseUrl from it", () => {
+    const config = loadServerConfig({ PORT: "not-a-port" } as NodeJS.ProcessEnv);
+    expect(config.http.port).toBe(3000);
+    expect(config.http.publicBaseUrl).toBe("http://localhost:3000");
+  });
+});

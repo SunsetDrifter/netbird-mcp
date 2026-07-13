@@ -1,27 +1,22 @@
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import { normalizeBaseUrl } from "../config.js";
+import {
+  normalizeBaseUrl,
+  DEFAULT_MAX_REQUESTS_PER_MINUTE,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+} from "../config.js";
 import type { Logger } from "../logger.js";
 import { AuthContext, AuthError } from "../auth/context.js";
-import { NetBirdClient } from "../netbird/client.js";
+import { NetBirdClient, type TokenVerification } from "../netbird/client.js";
 import { RateLimiter } from "../netbird/rateLimiter.js";
 import { ACCESS_TTL_SECONDS, OAuthStore, type NetBirdBinding } from "./store.js";
 import type { LoginPageParams } from "./loginPage.js";
-
-// Defaults for the short-lived client built solely to verify a PAT at login
-// time (mirrors the ServerConfig defaults in config.ts).
-const DEFAULT_VERIFY_TIMEOUT_MS = 30_000;
-const DEFAULT_VERIFY_MAX_REQUESTS_PER_MINUTE = 110;
 
 export interface OAuthCoreOptions {
   logger: Logger;
   /** Verify a NetBird PAT during login by making a cheap read call. */
   verifyPatOnLogin?: boolean;
   fetchImpl?: typeof fetch;
-  /** Timeout for the login-time PAT verification call, in ms. */
-  verifyTimeoutMs?: number;
-  /** Client-side rate-limit cap applied to the login-time verification call. */
-  verifyMaxRequestsPerMinute?: number;
 }
 
 /** Raw inputs to the authorization decision — one per OAuthServerProvider#authorize call. */
@@ -74,16 +69,14 @@ export class OAuthCore {
   private readonly logger: Logger;
   private readonly verifyPat: boolean;
   private readonly fetchImpl: typeof fetch;
-  private readonly verifyTimeoutMs: number;
-  private readonly verifyMaxRequestsPerMinute: number;
+  // Shared across all logins so a burst of login attempts is throttled as one
+  // stream, not one fresh (and therefore never-tripping) limiter per attempt.
+  private readonly verifyLimiter = new RateLimiter(DEFAULT_MAX_REQUESTS_PER_MINUTE);
 
   constructor(opts: OAuthCoreOptions) {
     this.logger = opts.logger;
     this.verifyPat = opts.verifyPatOnLogin ?? true;
     this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.verifyTimeoutMs = opts.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS;
-    this.verifyMaxRequestsPerMinute =
-      opts.verifyMaxRequestsPerMinute ?? DEFAULT_VERIFY_MAX_REQUESTS_PER_MINUTE;
   }
 
   // --- dynamic client registration (backs the adapter's clientsStore) ---
@@ -151,6 +144,13 @@ export class OAuthCore {
     };
     const netbirdToken = (form.netbirdToken ?? "").trim();
     const baseUrl = normalizeBaseUrl(form.netbirdApiUrl);
+    if (!isHttpUrl(baseUrl)) {
+      return {
+        kind: "error",
+        reason: "The NetBird API URL must be a valid http(s) URL.",
+        ...prefill,
+      };
+    }
 
     const client = this.store.getClient(prefill.clientId);
     if (!client || !prefill.codeChallenge || !prefill.redirectUri) {
@@ -293,14 +293,24 @@ export class OAuthCore {
    * header convention, timeout, retry, and rate limiting have exactly one
    * implementation — the same one every tool call uses.
    */
-  private checkPat(pat: string, baseUrl: string): Promise<"ok" | "invalid" | "unknown"> {
+  private checkPat(pat: string, baseUrl: string): Promise<TokenVerification> {
     const client = new NetBirdClient({
       auth: { token: pat, baseUrl },
       logger: this.logger,
-      rateLimiter: new RateLimiter(this.verifyMaxRequestsPerMinute),
-      timeoutMs: this.verifyTimeoutMs,
+      rateLimiter: this.verifyLimiter,
+      timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
       fetchImpl: this.fetchImpl,
     });
     return client.verifyToken();
+  }
+}
+
+/** The login form's API URL is untrusted input and becomes a fetch target — accept only http(s). */
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
   }
 }

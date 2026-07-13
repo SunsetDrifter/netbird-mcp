@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { resolveAuth } from "../src/auth/resolve.js";
 import { NetBirdOAuthProvider } from "../src/oauth/provider.js";
 import { AuthError } from "../src/auth/context.js";
@@ -113,5 +113,40 @@ describe("resolveAuth", () => {
       { tokenHeader: "x-my-token", urlHeader: "x-my-url" },
     );
     expect(auth).toEqual({ token: "pat", baseUrl: "https://self.hosted" });
+  });
+});
+
+describe("resolveAuth — scheme and expiry edges", () => {
+  async function authErrorCode(p: Promise<unknown>): Promise<string | undefined> {
+    try {
+      await p;
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      return (err as AuthError).code;
+    }
+    throw new Error("expected AuthError, but the promise resolved");
+  }
+
+  it("tags an unrecognized Authorization scheme as wrong_scheme", async () => {
+    const code = await authErrorCode(resolveAuth({ authorization: "Basic dXNlcjpwdw==" }));
+    expect(code).toBe("wrong_scheme");
+  });
+
+  it("rejects an expired Bearer token as unknown_token", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = newProvider();
+      const token = await mintAccessToken(provider, {
+        netbirdToken: "pat-x",
+        baseUrl: "https://api.example.com",
+      });
+      vi.advanceTimersByTime(61 * 60 * 1000); // past the 1h access-token TTL
+      const code = await authErrorCode(
+        resolveAuth({ authorization: `Bearer ${token}` }, { provider }),
+      );
+      expect(code).toBe("unknown_token");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

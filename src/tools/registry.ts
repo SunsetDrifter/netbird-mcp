@@ -87,7 +87,7 @@ function preview(action: string, request: unknown): CallToolResult {
 }
 
 /** Wrap a tool handler so NetBird errors become clean tool errors, not crashes. */
-async function guard(fn: () => Promise<CallToolResult>): Promise<CallToolResult> {
+async function guard(logger: Logger, fn: () => Promise<CallToolResult>): Promise<CallToolResult> {
   try {
     return await fn();
   } catch (err) {
@@ -97,7 +97,11 @@ async function guard(fn: () => Promise<CallToolResult>): Promise<CallToolResult>
           (err.body ? JSON.stringify(err.body, null, 2) : ""),
       );
     }
-    return fail(`Unexpected error: ${(err as Error).message}`);
+    // Unexpected (non-API) failure: the caller gets a clean message, the
+    // operator gets the details — never swallow the context.
+    const error = err as Error;
+    logger.error("unexpected tool error", { message: error.message, stack: error.stack });
+    return fail(`Unexpected error: ${error.message}`);
   }
 }
 
@@ -125,7 +129,7 @@ export function registerRead<Args extends ZodRawShapeCompat = Record<string, nev
       annotations: { readOnlyHint: true },
     },
     (async (args: ShapeOutput<Args>) =>
-      guard(async () => {
+      guard(deps.logger, async () => {
         const data = await deps.client.get(manifest.path(args), manifest.query?.(args));
         return ok(manifest.transformResponse ? manifest.transformResponse(data, args) : data);
       })) as unknown as ToolCallback<Args>,
@@ -151,7 +155,7 @@ export function registerMutation<Args extends ZodRawShapeCompat>(
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     (async (args: ShapeOutput<Args>) =>
-      guard(async () => {
+      guard(deps.logger, async () => {
         const body = stripUndefined(manifest.buildBody(args));
         if (!isConfirmed(args)) return preview(manifest.previewAction(args), body);
         const path = manifest.path(args);
@@ -185,7 +189,7 @@ export function registerDelete<Args extends ZodRawShapeCompat>(
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
     (async (args: ShapeOutput<Args>) =>
-      guard(async () => {
+      guard(deps.logger, async () => {
         const idValue = (args as Record<string, unknown>)[manifest.idField];
         if (!isConfirmed(args)) {
           return preview(`Would DELETE ${manifest.label} ${idValue}.`, {

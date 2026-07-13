@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
 import type { NetBirdOAuthProvider } from "../oauth/provider.js";
-import { authFromRequest, RequestAuthOptions } from "./fromRequest.js";
+import { authFromRequest, headerValue, RequestAuthOptions } from "./fromRequest.js";
 import { AuthContext, AuthError } from "./context.js";
 
 export interface AuthResolutionOptions extends RequestAuthOptions {
@@ -9,11 +9,6 @@ export interface AuthResolutionOptions extends RequestAuthOptions {
 }
 
 const BEARER_RE = /^Bearer\s+/i;
-
-function headerValue(headers: IncomingHttpHeaders, name: string): string | undefined {
-  const v = headers[name.toLowerCase()];
-  return Array.isArray(v) ? v[0] : v;
-}
 
 /**
  * Resolve a request to a NetBird AuthContext, or throw AuthError. The single

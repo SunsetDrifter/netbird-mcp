@@ -259,3 +259,65 @@ describe("login page XSS escaping (via the core's decision output)", () => {
     expect(html).toContain("&quot; onmouseover=&quot;alert(1)");
   });
 });
+
+describe("OAuthCore.completeLogin — API URL validation and indeterminate verification", () => {
+  function loginForm(client: OAuthClientInformationFull) {
+    return {
+      clientId: client.client_id,
+      redirectUri: client.redirect_uris[0],
+      codeChallenge: "c1",
+      state: "s1",
+      netbirdToken: "pat-1",
+    };
+  }
+
+  it("rejects a non-http(s) NetBird API URL before any verification fetch", async () => {
+    const fetchSpy = vi.fn();
+    const core = newCore({ verifyPatOnLogin: true, fetchImpl: fetchSpy as unknown as typeof fetch });
+    const client = registerClient(core);
+
+    const decision = await core.completeLogin({
+      ...loginForm(client),
+      netbirdApiUrl: "javascript:alert(1)",
+    });
+
+    expect(decision.kind).toBe("error");
+    expect((decision as { reason: string }).reason).toMatch(/valid http/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("lets login proceed when PAT verification is indeterminate (network failure)", async () => {
+    const failingFetch = (() =>
+      Promise.reject(new Error("ECONNREFUSED"))) as unknown as typeof fetch;
+    const core = newCore({ verifyPatOnLogin: true, fetchImpl: failingFetch });
+    const client = registerClient(core);
+
+    // The verification call retries with real backoff sleeps before settling
+    // on "unknown" — pump fake timers through them instead of waiting.
+    vi.useFakeTimers();
+    try {
+      const pending = core.completeLogin(loginForm(client));
+      await vi.runAllTimersAsync();
+      const decision = await pending;
+      expect(decision.kind).toBe("redirect");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("login page escaping — remaining reflected params", () => {
+  it("escapes hostile client_id, redirect_uri, resource and code_challenge reflections", () => {
+    const hostile = '"><script>alert(1)</script>';
+    const html = renderLoginPage({
+      clientId: hostile,
+      redirectUri: `http://localhost:9999/cb?x=${hostile}`,
+      state: hostile,
+      codeChallenge: hostile,
+      scope: hostile,
+      resource: hostile,
+    });
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+});

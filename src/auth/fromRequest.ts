@@ -9,7 +9,7 @@ export interface RequestAuthOptions {
   urlHeader?: string;
 }
 
-function headerValue(headers: IncomingHttpHeaders, name: string): string | undefined {
+export function headerValue(headers: IncomingHttpHeaders, name: string): string | undefined {
   const v = headers[name.toLowerCase()];
   return Array.isArray(v) ? v[0] : v;
 }

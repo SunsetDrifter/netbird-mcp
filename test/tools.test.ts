@@ -25,6 +25,14 @@ const baseConfig: ServerConfig = {
   maxRequestsPerMinute: 1000,
   requestTimeoutMs: 5000,
   logLevel: "error",
+  http: {
+    port: 3000,
+    tokenHeader: "x-netbird-token",
+    urlHeader: "x-netbird-api-url",
+    oauthEnabled: false,
+    publicBaseUrl: "http://localhost:3000",
+    verifyPatOnLogin: false,
+  },
 };
 
 interface RecordedCall {
@@ -215,5 +223,63 @@ describe("tool layer (via MCP client over in-memory transport)", () => {
     expect(recorder.calls[0].method).toBe("GET");
     expect(recorder.calls[0].url).toBe("https://api.netbird.io/api/networks/net1");
     expect(jsonOf(result as never)).toEqual({ id: "net1" });
+  });
+});
+
+describe("per-manifest smoke coverage — remaining unique transforms", () => {
+  let recorder: ReturnType<typeof makeRecordingFetch>;
+
+  beforeEach(() => {
+    recorder = makeRecordingFetch();
+  });
+
+  it("list_peers forwards name/ip filters as query params", async () => {
+    const client = await connectClient(baseConfig, recorder.fetchImpl);
+
+    await client.callTool({ name: "list_peers", arguments: { name: "office", ip: "100.64.0.1" } });
+
+    expect(recorder.calls).toHaveLength(1);
+    const url = new URL(recorder.calls[0].url);
+    expect(url.pathname).toBe("/api/peers");
+    expect(url.searchParams.get("name")).toBe("office");
+    expect(url.searchParams.get("ip")).toBe("100.64.0.1");
+  });
+
+  it("create_policy sends the rule set with the enabled default applied", async () => {
+    const client = await connectClient(baseConfig, recorder.fetchImpl);
+
+    await client.callTool({
+      name: "create_policy",
+      arguments: {
+        name: "allow-web",
+        rules: [{ sources: ["g1"], destinations: ["g2"], protocol: "tcp", ports: ["443"] }],
+        confirm: true,
+      },
+    });
+
+    expect(recorder.calls).toHaveLength(1);
+    const call = recorder.calls[0];
+    expect(call.method).toBe("POST");
+    expect(new URL(call.url).pathname).toBe("/api/policies");
+    const body = call.body as { name: string; enabled: boolean; rules: Array<Record<string, unknown>> };
+    expect(body.name).toBe("allow-web");
+    expect(body.enabled).toBe(true); // schema default, applied without being passed
+    expect(body.rules[0]).toMatchObject({ sources: ["g1"], destinations: ["g2"], protocol: "tcp" });
+    expect(body).not.toHaveProperty("description"); // undefined fields stripped
+  });
+
+  it("update_setup_key PUTs only the provided fields to the key's path", async () => {
+    const client = await connectClient(baseConfig, recorder.fetchImpl);
+
+    await client.callTool({
+      name: "update_setup_key",
+      arguments: { key_id: "k 1", revoked: true, confirm: true },
+    });
+
+    expect(recorder.calls).toHaveLength(1);
+    const call = recorder.calls[0];
+    expect(call.method).toBe("PUT");
+    expect(new URL(call.url).pathname).toBe("/api/setup-keys/k%201");
+    expect(call.body).toEqual({ revoked: true });
   });
 });

@@ -5,6 +5,10 @@
  */
 
 export const DEFAULT_NETBIRD_API_URL = "https://api.netbird.io";
+/** Client-side cap kept under NetBird Cloud's 120 req/min limit. */
+export const DEFAULT_MAX_REQUESTS_PER_MINUTE = 110;
+/** Per-request timeout for NetBird calls, in ms. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -52,13 +56,15 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     : "info";
 
   // Port is resolved first: the public base URL default is derived from it.
-  const port = Number(env.PORT ?? 3000);
+  // intEnv guards malformed values — a garbage PORT must not yield NaN here
+  // (it would poison the derived publicBaseUrl and the listen call).
+  const port = intEnv(env.PORT, 3000);
   const publicBaseUrl = (env.PUBLIC_BASE_URL ?? `http://localhost:${port}`).replace(/\/+$/, "");
 
   return {
     enableDestructive: boolEnv(env.NETBIRD_ENABLE_DESTRUCTIVE, false),
-    maxRequestsPerMinute: intEnv(env.NETBIRD_MAX_RPM, 110),
-    requestTimeoutMs: intEnv(env.NETBIRD_TIMEOUT_MS, 30_000),
+    maxRequestsPerMinute: intEnv(env.NETBIRD_MAX_RPM, DEFAULT_MAX_REQUESTS_PER_MINUTE),
+    requestTimeoutMs: intEnv(env.NETBIRD_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS),
     logLevel,
     http: {
       port,
