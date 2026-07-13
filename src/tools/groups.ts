@@ -17,7 +17,6 @@ export function registerGroupTools(server: McpServer, deps: ToolDeps): void {
     inputSchema: {
       name: z.string().describe("Group name."),
       peers: z.array(z.string()).optional().describe("Peer IDs to place in the group."),
-      confirm: z.boolean().optional().describe("Set true to create the group."),
     },
     method: "POST",
     path: () => "/api/groups",
@@ -38,7 +37,6 @@ export function registerGroupTools(server: McpServer, deps: ToolDeps): void {
         .array(z.string())
         .optional()
         .describe("Full replacement list of peer IDs in the group."),
-      confirm: z.boolean().optional().describe("Set true to apply the change."),
     },
     method: "PUT",
     path: ({ group_id }) => `/api/groups/${encodeURIComponent(group_id)}`,
@@ -54,7 +52,6 @@ export function registerGroupTools(server: McpServer, deps: ToolDeps): void {
       "route. Requires the exact group_id and confirm=true.",
     inputSchema: {
       group_id: z.string().describe("The exact group ID to delete."),
-      confirm: z.boolean().describe("Must be true to delete."),
     },
     path: ({ group_id }) => `/api/groups/${encodeURIComponent(group_id)}`,
     label: "group",

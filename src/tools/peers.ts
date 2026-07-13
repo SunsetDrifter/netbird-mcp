@@ -55,7 +55,6 @@ export function registerPeerTools(server: McpServer, deps: ToolDeps): void {
         .boolean()
         .optional()
         .describe("Whether the peer requires approval."),
-      confirm: z.boolean().optional().describe("Set true to apply the change."),
     },
     method: "PUT",
     path: ({ peer_id }) => `/api/peers/${encodeURIComponent(peer_id)}`,
@@ -77,7 +76,6 @@ export function registerPeerTools(server: McpServer, deps: ToolDeps): void {
       "named explicitly by the user.",
     inputSchema: {
       peer_id: z.string().describe("The exact peer ID to delete."),
-      confirm: z.boolean().describe("Must be true to delete."),
     },
     path: ({ peer_id }) => `/api/peers/${encodeURIComponent(peer_id)}`,
     label: "peer",
