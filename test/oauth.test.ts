@@ -5,7 +5,13 @@ import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/share
 const silentLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 
 function newProvider(opts: Partial<ProviderOptions> = {}) {
-  return new NetBirdOAuthProvider({ logger: silentLogger, verifyPatOnLogin: false, ...opts });
+  return new NetBirdOAuthProvider({
+    logger: silentLogger,
+    verifyPatOnLogin: false,
+    maxRequestsPerMinute: 110,
+    requestTimeoutMs: 30_000,
+    ...opts,
+  });
 }
 
 async function registerClient(p: NetBirdOAuthProvider): Promise<OAuthClientInformationFull> {

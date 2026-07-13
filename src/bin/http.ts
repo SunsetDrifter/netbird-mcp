@@ -29,7 +29,12 @@ const logger = createLogger(config.logLevel);
 const { port, tokenHeader, urlHeader, oauthEnabled, publicBaseUrl, verifyPatOnLogin } =
   config.http;
 
-const provider = new NetBirdOAuthProvider({ logger, verifyPatOnLogin });
+const provider = new NetBirdOAuthProvider({
+  logger,
+  verifyPatOnLogin,
+  maxRequestsPerMinute: config.maxRequestsPerMinute,
+  requestTimeoutMs: config.requestTimeoutMs,
+});
 
 // One rate limiter per tenant (keyed by a hash of the NetBird token, never the token
 // itself), so NetBird's per-account limit is respected without cross-tenant interference.
