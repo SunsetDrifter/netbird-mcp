@@ -128,6 +128,10 @@ tenants. `Authorization: Bearer` is reserved for OAuth. Disable OAuth entirely w
 | `NETBIRD_TOKEN_HEADER` | cloud | `x-netbird-token` | Header carrying the caller's PAT (direct-PAT mode) |
 | `NETBIRD_URL_HEADER` | cloud | `x-netbird-api-url` | Optional per-tenant base URL header |
 
+Boolean variables accept `1`, `true`, `yes`, or `on` (case-insensitive) as true; any other
+value — including a typo — is treated as **false**, so a misspelled flag fails closed rather
+than silently enabling something.
+
 ---
 
 ## Tools (v1)
