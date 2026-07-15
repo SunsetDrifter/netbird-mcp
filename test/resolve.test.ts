@@ -36,6 +36,7 @@ function newProvider(): NetBirdOAuthProvider {
     verifyPatOnLogin: false,
     maxRequestsPerMinute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
     requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+    allowedApiHosts: ALLOWED,
   });
 }
 

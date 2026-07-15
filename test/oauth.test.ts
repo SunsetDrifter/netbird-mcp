@@ -3,7 +3,7 @@ import { NetBirdOAuthProvider, type ProviderOptions } from "../src/oauth/provide
 import { DEFAULT_MAX_REQUESTS_PER_MINUTE, DEFAULT_REQUEST_TIMEOUT_MS } from "../src/config.js";
 import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { silentLogger, pkcePair } from "./helpers.js";
+import { silentLogger, pkcePair, TEST_ALLOWED_API_HOSTS } from "./helpers.js";
 
 // A real PKCE pair: the exchange re-verifies S256(verifier) === stored challenge.
 const { verifier: VERIFIER, challenge: CHALLENGE } = pkcePair(
@@ -16,6 +16,7 @@ function newProvider(opts: Partial<ProviderOptions> = {}) {
     verifyPatOnLogin: false,
     maxRequestsPerMinute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
     requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+    allowedApiHosts: TEST_ALLOWED_API_HOSTS,
     ...opts,
   });
 }

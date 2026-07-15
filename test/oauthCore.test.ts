@@ -4,7 +4,7 @@ import { DEFAULT_MAX_REQUESTS_PER_MINUTE, DEFAULT_REQUEST_TIMEOUT_MS } from "../
 import { renderLoginPage, type LoginPageParams } from "../src/oauth/loginPage.js";
 import { InvalidGrantError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { silentLogger, pkcePair } from "./helpers.js";
+import { silentLogger, pkcePair, TEST_ALLOWED_API_HOSTS } from "./helpers.js";
 
 function newCore(opts: Partial<OAuthCoreOptions> = {}): OAuthCore {
   return new OAuthCore({
@@ -12,6 +12,7 @@ function newCore(opts: Partial<OAuthCoreOptions> = {}): OAuthCore {
     verifyPatOnLogin: false,
     maxRequestsPerMinute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
     requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+    allowedApiHosts: TEST_ALLOWED_API_HOSTS,
     ...opts,
   });
 }
@@ -375,6 +376,50 @@ describe("OAuthCore.completeLogin — API URL validation and indeterminate verif
     expect(decision.kind).toBe("error");
     expect((decision as { reason: string }).reason).toMatch(/valid http/i);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a NetBird API URL whose host is not on the allowlist, before any fetch", async () => {
+    const fetchSpy = vi.fn();
+    const core = newCore({ verifyPatOnLogin: true, fetchImpl: fetchSpy as unknown as typeof fetch });
+    const client = registerClient(core);
+
+    const decision = await core.completeLogin({
+      ...loginForm(client),
+      netbirdApiUrl: "https://evil.example.com",
+    });
+
+    expect(decision.kind).toBe("error");
+    expect((decision as { reason: string }).reason).toMatch(/allowlist|not allowed/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a metadata-IP NetBird API URL before any fetch (SSRF oracle closed)", async () => {
+    const fetchSpy = vi.fn();
+    const core = newCore({ verifyPatOnLogin: true, fetchImpl: fetchSpy as unknown as typeof fetch });
+    const client = registerClient(core);
+
+    const decision = await core.completeLogin({
+      ...loginForm(client),
+      netbirdApiUrl: "http://169.254.169.254",
+    });
+
+    expect(decision.kind).toBe("error");
+    expect((decision as { reason: string }).reason).toMatch(/private|loopback|link-local|metadata|allowlist/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("lets an allowlisted self-hosted URL proceed to a redirect", async () => {
+    const acceptingFetch = vi.fn(async () => jsonResponse([{ id: "u1" }])) as unknown as typeof fetch;
+    const core = newCore({ verifyPatOnLogin: true, fetchImpl: acceptingFetch });
+    const client = registerClient(core);
+
+    const decision = await core.completeLogin({
+      ...loginForm(client),
+      netbirdApiUrl: "https://self.hosted",
+    });
+
+    expect(decision.kind).toBe("redirect");
+    expect(acceptingFetch).toHaveBeenCalledOnce();
   });
 
   it("lets login proceed when PAT verification is indeterminate (network failure)", async () => {

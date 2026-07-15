@@ -6,6 +6,7 @@ import { normalizeBaseUrl } from "../config.js";
 import type { Logger } from "../logger.js";
 import { AuthContext, AuthError } from "../auth/context.js";
 import { verifyPat, type TokenVerification } from "../netbird/client.js";
+import { checkApiUrl } from "../netbird/apiUrlPolicy.js";
 import { RateLimiter } from "../netbird/rateLimiter.js";
 import { ACCESS_TTL_SECONDS, OAuthStore, type NetBirdBinding } from "./store.js";
 import type { LoginPageParams } from "./loginPage.js";
@@ -14,6 +15,12 @@ export interface OAuthCoreOptions {
   logger: Logger;
   /** Verify a NetBird PAT during login by making a cheap read call. */
   verifyPatOnLogin?: boolean;
+  /**
+   * Hosts a submitted netbird_api_url may target — the resolved
+   * config.allowedApiHosts. The login flow checks against this before any
+   * verification fetch, so the form can't be used to reach an internal host.
+   */
+  allowedApiHosts: readonly string[];
   /**
    * Client-side per-minute cap for login-path PAT verification. Required — the
    * operator's resolved config (NETBIRD_MAX_RPM) is threaded down here so the
@@ -80,6 +87,7 @@ export class OAuthCore {
   private readonly verifyPat: boolean;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly allowedApiHosts: readonly string[];
   // Shared across all logins so a burst of login attempts is throttled as one
   // stream, not one fresh (and therefore never-tripping) limiter per attempt.
   private readonly verifyLimiter: RateLimiter;
@@ -89,6 +97,7 @@ export class OAuthCore {
     this.verifyPat = opts.verifyPatOnLogin ?? true;
     this.timeoutMs = opts.requestTimeoutMs;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.allowedApiHosts = opts.allowedApiHosts;
     this.verifyLimiter = new RateLimiter(opts.maxRequestsPerMinute);
   }
 
@@ -157,10 +166,11 @@ export class OAuthCore {
     };
     const netbirdToken = (form.netbirdToken ?? "").trim();
     const baseUrl = normalizeBaseUrl(form.netbirdApiUrl);
-    if (!isHttpUrl(baseUrl)) {
+    const urlCheck = checkApiUrl(baseUrl, this.allowedApiHosts);
+    if (!urlCheck.allowed) {
       return {
         kind: "error",
-        reason: "The NetBird API URL must be a valid http(s) URL.",
+        reason: `That NetBird API URL is not allowed: ${urlCheck.reason}.`,
         ...prefill,
       };
     }
@@ -340,14 +350,4 @@ function pkceMatches(codeVerifier: string | undefined, storedChallenge: string):
   const b = Buffer.from(storedChallenge);
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
-}
-
-/** The login form's API URL is untrusted input and becomes a fetch target — accept only http(s). */
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
 }

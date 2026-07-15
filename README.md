@@ -101,6 +101,10 @@ The flow implemented: OAuth 2.0 Protected Resource + Authorization Server metada
 > The prototype keeps OAuth token→PAT bindings **in memory**. For production, back them with a
 > shared, encrypted store (e.g. Redis) so tokens survive restarts and work across replicas.
 
+> Behind a reverse proxy or load balancer, set Express `trust proxy` appropriately so the
+> per-IP rate limits (on the OAuth routes and the `/oauth/netbird-login` form) key on the real
+> client IP rather than the proxy's — otherwise all clients share one bucket.
+
 ### Direct-PAT alternative (testing / simple deploys)
 
 Instead of OAuth you can pass the NetBird PAT directly per request via the `x-netbird-token`

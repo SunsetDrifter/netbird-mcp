@@ -13,6 +13,7 @@ import { LimiterPool } from "../netbird/limiterPool.js";
 import { verifyPat, type TokenVerification } from "../netbird/client.js";
 import { buildServer } from "../server.js";
 import { NetBirdOAuthProvider } from "../oauth/provider.js";
+import { loginRateLimiter } from "../oauth/loginRateLimit.js";
 
 /**
  * CLOUD entrypoint. Speaks MCP over Streamable HTTP so the server can be hosted
@@ -34,6 +35,7 @@ const provider = new NetBirdOAuthProvider({
   verifyPatOnLogin,
   maxRequestsPerMinute: config.maxRequestsPerMinute,
   requestTimeoutMs: config.requestTimeoutMs,
+  allowedApiHosts: config.allowedApiHosts,
 });
 
 // One rate limiter per tenant (keyed by a hash of the NetBird token, never the token
@@ -90,8 +92,10 @@ if (oauthEnabled) {
       resourceName: "NetBird",
     }),
   );
-  // Our interactive login step (the page /authorize renders posts here).
-  app.post("/oauth/netbird-login", provider.handleLogin);
+  // Our interactive login step (the page /authorize renders posts here). Rate
+  // limited like the SDK's own auth routes, since each submission triggers an
+  // outbound PAT verification.
+  app.post("/oauth/netbird-login", loginRateLimiter(), provider.handleLogin);
 }
 
 app.post("/mcp", async (req, res) => {
