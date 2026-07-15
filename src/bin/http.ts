@@ -7,7 +7,7 @@ import {
 } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { resolveAuth } from "../auth/resolve.js";
 import { AuthContext, AuthError } from "../auth/context.js";
-import { loadServerConfig } from "../config.js";
+import { loadConfigOrExit } from "./loadConfigOrExit.js";
 import { createLogger } from "../logger.js";
 import { LimiterPool } from "../netbird/limiterPool.js";
 import { buildServer } from "../server.js";
@@ -23,7 +23,7 @@ import { NetBirdOAuthProvider } from "../oauth/provider.js";
  * Stateless: each request gets a fresh server instance, so one deployment safely
  * serves many tenants and scales horizontally.
  */
-const config = loadServerConfig();
+const config = loadConfigOrExit();
 const logger = createLogger(config.logLevel);
 const { port, tokenHeader, urlHeader, oauthEnabled, publicBaseUrl, verifyPatOnLogin } =
   config.http;

@@ -34,6 +34,7 @@ const baseConfig: ServerConfig = {
   maxRequestsPerMinute: 1000,
   requestTimeoutMs: 5000,
   logLevel: "error",
+  allowedApiHosts: ["api.netbird.io"],
   http: {
     port: 3000,
     tokenHeader: "x-netbird-token",

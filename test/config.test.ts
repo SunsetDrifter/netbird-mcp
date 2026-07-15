@@ -159,6 +159,56 @@ describe("loadServerConfig — http header names", () => {
   });
 });
 
+describe("loadServerConfig — NetBird API host allowlist", () => {
+  it("defaults the allowlist to the canonical public host", () => {
+    const config = loadServerConfig({} as NodeJS.ProcessEnv);
+    expect(config.allowedApiHosts).toEqual(["api.netbird.io"]);
+  });
+
+  it("auto-trusts the operator's configured NETBIRD_API_URL host", () => {
+    const config = loadServerConfig({
+      NETBIRD_API_URL: "https://nb.corp.example.com",
+    } as NodeJS.ProcessEnv);
+    expect(config.allowedApiHosts).toContain("nb.corp.example.com");
+  });
+
+  it("adds NETBIRD_ALLOWED_API_HOSTS entries, accepting bare hosts and full URLs", () => {
+    const config = loadServerConfig({
+      NETBIRD_ALLOWED_API_HOSTS: "nb1.example.com, https://nb2.example.com:8443/api ,  ",
+    } as NodeJS.ProcessEnv);
+    expect(config.allowedApiHosts).toContain("nb1.example.com");
+    expect(config.allowedApiHosts).toContain("nb2.example.com");
+  });
+
+  it("deduplicates hosts and drops unparseable entries", () => {
+    const config = loadServerConfig({
+      NETBIRD_ALLOWED_API_HOSTS: "api.netbird.io, api.netbird.io, ::: ,",
+    } as NodeJS.ProcessEnv);
+    expect(config.allowedApiHosts).toEqual(["api.netbird.io"]);
+  });
+
+  it("accepts a self-hosted https NETBIRD_API_URL without throwing", () => {
+    expect(() =>
+      loadServerConfig({ NETBIRD_API_URL: "https://nb.corp.example.com" } as NodeJS.ProcessEnv),
+    ).not.toThrow();
+  });
+
+  it("accepts a loopback NETBIRD_API_URL the operator explicitly configured (local/self-host)", () => {
+    expect(() =>
+      loadServerConfig({ NETBIRD_API_URL: "http://127.0.0.1:8080" } as NodeJS.ProcessEnv),
+    ).not.toThrow();
+  });
+
+  it("fails fast when NETBIRD_API_URL is not a valid http(s) URL", () => {
+    expect(() =>
+      loadServerConfig({ NETBIRD_API_URL: "ftp://nb.example.com" } as NodeJS.ProcessEnv),
+    ).toThrow(/NETBIRD_API_URL/);
+    expect(() =>
+      loadServerConfig({ NETBIRD_API_URL: "api.netbird.io" } as NodeJS.ProcessEnv),
+    ).toThrow(/NETBIRD_API_URL/);
+  });
+});
+
 describe("normalizeBaseUrl", () => {
   it("defaults to the NetBird cloud API URL when unset", () => {
     expect(normalizeBaseUrl(undefined)).toBe("https://api.netbird.io");

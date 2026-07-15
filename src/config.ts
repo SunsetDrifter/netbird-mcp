@@ -4,6 +4,8 @@
  * logic and transport wiring stay transport-agnostic.
  */
 
+import { checkApiUrl, hostOf } from "./netbird/apiUrlPolicy.js";
+
 export const DEFAULT_NETBIRD_API_URL = "https://api.netbird.io";
 /** Client-side cap kept under NetBird Cloud's 120 req/min limit. */
 export const DEFAULT_MAX_REQUESTS_PER_MINUTE = 110;
@@ -40,6 +42,13 @@ export interface ServerConfig {
   /** Per-request timeout for NetBird calls, in ms. */
   requestTimeoutMs: number;
   logLevel: LogLevel;
+  /**
+   * Hosts a NetBird API base URL is allowed to target — the single trust set the
+   * URL policy (see netbird/apiUrlPolicy) checks base URLs against. Contains the
+   * configured NETBIRD_API_URL host (which is the public default when unset) plus
+   * any NETBIRD_ALLOWED_API_HOSTS entries.
+   */
+  allowedApiHosts: readonly string[];
   http: HttpConfig;
 }
 
@@ -53,11 +62,40 @@ function intEnv(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/**
+ * Build the base-URL host allowlist from operator config: the configured
+ * NETBIRD_API_URL host (which normalizeBaseUrl resolves to the public default
+ * when unset), plus any NETBIRD_ALLOWED_API_HOSTS entries. Junk entries are
+ * dropped and hosts deduped, so the result is a clean trust set for the policy.
+ */
+function parseAllowedApiHosts(env: NodeJS.ProcessEnv): string[] {
+  const configured = hostOf(normalizeBaseUrl(env.NETBIRD_API_URL));
+  const extras = (env.NETBIRD_ALLOWED_API_HOSTS ?? "")
+    .split(",")
+    .map((entry) => hostOf(entry))
+    .filter((host): host is string => host !== null);
+  const all = [configured, ...extras].filter((host): host is string => host !== null);
+  return [...new Set(all)];
+}
+
 export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const level = (env.LOG_LEVEL ?? "info").toLowerCase();
   const logLevel: LogLevel = ["debug", "info", "warn", "error"].includes(level)
     ? (level as LogLevel)
     : "info";
+
+  // The operator's configured base URL is trusted (its host is auto-allowlisted),
+  // so this only fails fast on a malformed value — a scheme-less or non-http(s)
+  // NETBIRD_API_URL — rather than letting the server boot with a broken target.
+  const allowedApiHosts = parseAllowedApiHosts(env);
+  const configuredBaseUrl = normalizeBaseUrl(env.NETBIRD_API_URL);
+  const urlCheck = checkApiUrl(configuredBaseUrl, allowedApiHosts);
+  if (!urlCheck.allowed) {
+    throw new Error(
+      `NETBIRD_API_URL is not usable: ${urlCheck.reason}. ` +
+        `Set it to a full https URL for your NetBird API (e.g. https://api.netbird.io).`,
+    );
+  }
 
   // Port is resolved first: the public base URL default is derived from it.
   // intEnv guards malformed values — a garbage PORT must not yield NaN here
@@ -70,6 +108,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     maxRequestsPerMinute: intEnv(env.NETBIRD_MAX_RPM, DEFAULT_MAX_REQUESTS_PER_MINUTE),
     requestTimeoutMs: intEnv(env.NETBIRD_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS),
     logLevel,
+    allowedApiHosts,
     http: {
       port,
       tokenHeader: env.NETBIRD_TOKEN_HEADER ?? DEFAULT_TOKEN_HEADER,
