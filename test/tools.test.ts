@@ -40,6 +40,7 @@ const baseConfig: ServerConfig = {
     tokenHeader: "x-netbird-token",
     urlHeader: "x-netbird-api-url",
     oauthEnabled: false,
+    directPatEnabled: true,
     publicBaseUrl: "http://localhost:3000",
     verifyPatOnLogin: false,
   },

@@ -53,6 +53,7 @@ describe("loadServerConfig — http sub-object defaults", () => {
       tokenHeader: "x-netbird-token",
       urlHeader: "x-netbird-api-url",
       oauthEnabled: true,
+      directPatEnabled: false,
       publicBaseUrl: "http://localhost:3000",
       verifyPatOnLogin: true,
     });
@@ -80,6 +81,7 @@ describe("loadServerConfig — http sub-object explicit values", () => {
       tokenHeader: "x-custom-token",
       urlHeader: "x-custom-url",
       oauthEnabled: false,
+      directPatEnabled: true,
       publicBaseUrl: "https://mcp.example.com",
       verifyPatOnLogin: false,
     });
@@ -95,6 +97,33 @@ describe("loadServerConfig — http sub-object explicit values", () => {
       PUBLIC_BASE_URL: "https://mcp.example.com///",
     } as NodeJS.ProcessEnv);
     expect(config.http.publicBaseUrl).toBe("https://mcp.example.com");
+  });
+});
+
+describe("loadServerConfig — direct-PAT availability", () => {
+  it("defaults direct-PAT OFF when OAuth is enabled (secure default)", () => {
+    const config = loadServerConfig({} as NodeJS.ProcessEnv);
+    expect(config.http.oauthEnabled).toBe(true);
+    expect(config.http.directPatEnabled).toBe(false);
+  });
+
+  it("defaults direct-PAT ON when OAuth is disabled (only auth path left)", () => {
+    const config = loadServerConfig({ NETBIRD_ENABLE_OAUTH: "false" } as NodeJS.ProcessEnv);
+    expect(config.http.directPatEnabled).toBe(true);
+  });
+
+  it("honors an explicit opt-in while OAuth stays enabled", () => {
+    const config = loadServerConfig({ NETBIRD_ENABLE_DIRECT_PAT: "true" } as NodeJS.ProcessEnv);
+    expect(config.http.oauthEnabled).toBe(true);
+    expect(config.http.directPatEnabled).toBe(true);
+  });
+
+  it("honors an explicit opt-out even when OAuth is disabled", () => {
+    const config = loadServerConfig({
+      NETBIRD_ENABLE_OAUTH: "false",
+      NETBIRD_ENABLE_DIRECT_PAT: "false",
+    } as NodeJS.ProcessEnv);
+    expect(config.http.directPatEnabled).toBe(false);
   });
 });
 

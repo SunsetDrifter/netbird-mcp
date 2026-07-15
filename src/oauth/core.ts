@@ -5,7 +5,7 @@ import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/
 import { normalizeBaseUrl } from "../config.js";
 import type { Logger } from "../logger.js";
 import { AuthContext, AuthError } from "../auth/context.js";
-import { NetBirdClient, type TokenVerification } from "../netbird/client.js";
+import { verifyPat, type TokenVerification } from "../netbird/client.js";
 import { RateLimiter } from "../netbird/rateLimiter.js";
 import { ACCESS_TTL_SECONDS, OAuthStore, type NetBirdBinding } from "./store.js";
 import type { LoginPageParams } from "./loginPage.js";
@@ -315,14 +315,15 @@ export class OAuthCore {
    * implementation — the same one every tool call uses.
    */
   private checkPat(pat: string, baseUrl: string): Promise<TokenVerification> {
-    const client = new NetBirdClient({
-      auth: { token: pat, baseUrl },
-      logger: this.logger,
-      rateLimiter: this.verifyLimiter,
-      timeoutMs: this.timeoutMs,
-      fetchImpl: this.fetchImpl,
-    });
-    return client.verifyToken();
+    return verifyPat(
+      { token: pat, baseUrl },
+      {
+        logger: this.logger,
+        rateLimiter: this.verifyLimiter,
+        timeoutMs: this.timeoutMs,
+        fetchImpl: this.fetchImpl,
+      },
+    );
   }
 }
 

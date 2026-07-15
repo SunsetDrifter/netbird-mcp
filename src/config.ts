@@ -28,6 +28,13 @@ export interface HttpConfig {
   urlHeader: string;
   /** Whether the OAuth 2.1 authorization server is mounted. */
   oauthEnabled: boolean;
+  /**
+   * Whether the direct-PAT header path (x-netbird-token / Authorization: Token)
+   * is available. Defaults OFF when OAuth is enabled — a caller must opt in via
+   * NETBIRD_ENABLE_DIRECT_PAT — and ON when OAuth is disabled, since it is then
+   * the only way to authenticate over HTTP.
+   */
+  directPatEnabled: boolean;
   /** Externally reachable origin the AS advertises in its metadata. */
   publicBaseUrl: string;
   /** Whether a PAT is verified against NetBird at OAuth login time. */
@@ -103,6 +110,12 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   const port = intEnv(env.PORT, 3000);
   const publicBaseUrl = (env.PUBLIC_BASE_URL ?? `http://localhost:${port}`).replace(/\/+$/, "");
 
+  // Direct-PAT is a fallback path, not Claude's path. When OAuth is on it stays
+  // off unless explicitly opted into; when OAuth is off it defaults on so HTTP
+  // deployments still have a way to authenticate.
+  const oauthEnabled = boolEnv(env.NETBIRD_ENABLE_OAUTH, true);
+  const directPatEnabled = boolEnv(env.NETBIRD_ENABLE_DIRECT_PAT, !oauthEnabled);
+
   return {
     enableDestructive: boolEnv(env.NETBIRD_ENABLE_DESTRUCTIVE, false),
     maxRequestsPerMinute: intEnv(env.NETBIRD_MAX_RPM, DEFAULT_MAX_REQUESTS_PER_MINUTE),
@@ -113,7 +126,8 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       port,
       tokenHeader: env.NETBIRD_TOKEN_HEADER ?? DEFAULT_TOKEN_HEADER,
       urlHeader: env.NETBIRD_URL_HEADER ?? DEFAULT_URL_HEADER,
-      oauthEnabled: boolEnv(env.NETBIRD_ENABLE_OAUTH, true),
+      oauthEnabled,
+      directPatEnabled,
       publicBaseUrl,
       verifyPatOnLogin: boolEnv(env.NETBIRD_VERIFY_PAT_ON_LOGIN, true),
     },
